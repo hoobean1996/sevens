@@ -3,6 +3,234 @@ const canvas = document.getElementById('game');
 const renderer = new Renderer(canvas);
 const network = new Network();
 
+// Global mode: 'town' | 'run'
+let mode = 'town';
+
+// Town state (temporary, session-scoped only for now)
+const defaultTownState = {
+    resources: { wood: 0, stone: 0, ore: 0, gold: 0 },
+    buildings: {
+        hall: 1,
+        warehouse: 0,
+        lumber: 1,
+        quarry: 1,
+        mine: 1,
+        blacksmith: 0,
+        tavern: 0,
+        alchemy: 0,
+        accessory: 0,
+        shop: 0,
+    },
+    caps: {
+        equipSlots: 20,
+        materialSlots: 100,
+    },
+};
+
+let townState = null;
+let runTownBonus = { atkMult: 1, hpMult: 1, defMult: 1 };
+
+// ==================== TOWN NUMERIC HELPERS ====================
+
+function townCalcBaseCap(hallLevel) {
+    const L = Math.max(1, Math.min(10, hallLevel || 1));
+    return 1000 * (1 + 0.3 * (L - 1));
+}
+
+function townCalcResCap(hallLevel, warehouseLevel) {
+    const base = townCalcBaseCap(hallLevel);
+    const Lw = Math.max(0, Math.min(10, warehouseLevel || 0));
+    return base * (1 + 0.5 * Lw);
+}
+
+function townCalcYield(building, level) {
+    const L = Math.max(1, Math.min(10, level || 1));
+    switch (building) {
+    case 'lumber': {
+        const base = 5;
+        const alpha = 0.15;
+        return base * (1 + alpha * (L - 1));
+    }
+    case 'quarry': {
+        const base = 4;
+        const alpha = 0.15;
+        return base * (1 + alpha * (L - 1));
+    }
+    case 'mine': {
+        const base = 3;
+        const alpha = 0.20;
+        return base * (1 + alpha * (L - 1));
+    }
+    default:
+        return 0;
+    }
+}
+
+const TOWN_UPGRADE_BASE_COST = {
+    hall:      { wood: 40, stone: 60, ore: 40, gold: 80 },
+    warehouse: { wood: 30, stone: 50, ore: 10, gold: 40 },
+    lumber:    { wood: 5,  stone: 20, ore: 5,  gold: 15 },
+    quarry:    { wood: 20, stone: 5,  ore: 5,  gold: 15 },
+    mine:      { wood: 15, stone: 15, ore: 5,  gold: 20 },
+};
+
+function townCalcUpgradeCost(type, level) {
+    const base = TOWN_UPGRADE_BASE_COST[type];
+    if (!base) return null;
+    const L = Math.max(0, Math.min(9, level || 0));
+    const mult = (1 + L) * (1 + L);
+    return {
+        wood: Math.round(base.wood * mult),
+        stone: Math.round(base.stone * mult),
+        ore: Math.round(base.ore * mult),
+        gold: Math.round(base.gold * mult),
+    };
+}
+
+function townCanAfford(cost) {
+    if (!cost || !townState) return false;
+    const r = townState.resources;
+    return r.wood >= cost.wood && r.stone >= cost.stone && r.ore >= cost.ore && r.gold >= cost.gold;
+}
+
+function townSpend(cost) {
+    if (!cost || !townState) return;
+    townState.resources.wood -= cost.wood;
+    townState.resources.stone -= cost.stone;
+    townState.resources.ore -= cost.ore;
+    townState.resources.gold -= cost.gold;
+}
+
+function initTownState() {
+    if (!townState) {
+        try {
+            const saved = sessionStorage.getItem('sevens_town_state');
+            if (saved) {
+                townState = JSON.parse(saved);
+            } else {
+                townState = JSON.parse(JSON.stringify(defaultTownState));
+            }
+        } catch (e) {
+            console.warn('Failed to read town state from sessionStorage:', e);
+            townState = JSON.parse(JSON.stringify(defaultTownState));
+        }
+    }
+    updateTownUI();
+}
+
+function persistTownState() {
+    if (!townState) return;
+    try {
+        sessionStorage.setItem('sevens_town_state', JSON.stringify(townState));
+    } catch (e) {
+        console.warn('Failed to persist town state to sessionStorage:', e);
+    }
+}
+
+function updateTownUI() {
+    // Simple UI update for resources & building levels
+    const resEl = document.getElementById('town-resources');
+    if (resEl && townState) {
+        const r = townState.resources;
+        const caps = townGetResourceCaps();
+        resEl.textContent =
+            `木材 ${Math.floor(r.wood)} / ${caps.wood} · ` +
+            `石材 ${Math.floor(r.stone)} / ${caps.stone} · ` +
+            `矿石 ${Math.floor(r.ore)} / ${caps.ore} · ` +
+            `金币 ${Math.floor(r.gold)}`;
+    }
+    const hallEl = document.getElementById('town-b-hall-level');
+    if (hallEl && townState) hallEl.textContent = `Lv.${townState.buildings.hall}`;
+    const wareEl = document.getElementById('town-b-warehouse-level');
+    if (wareEl && townState) wareEl.textContent = `Lv.${townState.buildings.warehouse}`;
+    const lumberEl = document.getElementById('town-b-lumber-level');
+    if (lumberEl && townState) lumberEl.textContent = `Lv.${townState.buildings.lumber}`;
+    const quarryEl = document.getElementById('town-b-quarry-level');
+    if (quarryEl && townState) quarryEl.textContent = `Lv.${townState.buildings.quarry}`;
+    const mineEl = document.getElementById('town-b-mine-level');
+    if (mineEl && townState) mineEl.textContent = `Lv.${townState.buildings.mine}`;
+
+    persistTownState();
+}
+
+function townGetResourceCaps() {
+    if (!townState) {
+        return { wood: 0, stone: 0, ore: 0 };
+    }
+    const b = townState.buildings;
+    const cap = Math.round(townCalcResCap(b.hall, b.warehouse));
+    return { wood: cap, stone: cap, ore: cap };
+}
+
+function townComputeRunBonus() {
+    if (!townState) {
+        runTownBonus = { atkMult: 1, hpMult: 1, defMult: 1 };
+        return;
+    }
+    const b = townState.buildings;
+    const hall = b.hall || 1;
+    const warehouse = b.warehouse || 0;
+    const blacksmith = b.blacksmith || 0;
+
+    const hpMult = 1 + 0.01 * (hall - 1) + 0.005 * warehouse;
+    const atkMult = 1 + 0.02 * blacksmith;
+    const defMult = 1 + 0.01 * (warehouse + hall - 1);
+
+    runTownBonus = {
+        atkMult,
+        hpMult,
+        defMult,
+    };
+}
+
+function enterTownMode() {
+    mode = 'town';
+    gameStarted = false;
+    const townScreen = document.getElementById('town-screen');
+    const startScreen = document.getElementById('start-screen');
+    if (townScreen) townScreen.style.display = 'flex';
+    if (startScreen) startScreen.style.display = 'none';
+    document.getElementById('hud').style.display = 'none';
+    document.getElementById('skillbar').style.display = 'none';
+    canvas.style.cursor = 'default';
+}
+
+function onClickStartAdventure() {
+    // Switch to hero selection/start screen, but remain in town-aware flow
+    mode = 'run';
+    const townScreen = document.getElementById('town-screen');
+    const startScreen = document.getElementById('start-screen');
+    if (townScreen) townScreen.style.display = 'none';
+    if (startScreen) startScreen.style.display = 'flex';
+}
+
+function townUpgradeBuilding(type) {
+    if (!townState) return;
+    const b = townState.buildings;
+    const current = b[type] ?? 0;
+    if (current >= 10) {
+        console.log('[Town] building at max level:', type);
+        return;
+    }
+    // Enforce hall cap
+    if (type !== 'hall' && current >= b.hall) {
+        console.log('[Town] cannot exceed hall level', b.hall);
+        return;
+    }
+    const cost = townCalcUpgradeCost(type, current);
+    if (!cost) {
+        console.log('[Town] no cost config for building:', type);
+        return;
+    }
+    if (!townCanAfford(cost)) {
+        console.log('[Town] not enough resources to upgrade', type, cost);
+        return;
+    }
+    townSpend(cost);
+    b[type] = current + 1;
+    updateTownUI();
+}
+
 let localPlayerID = null;
 let mapWidth = 2000, mapHeight = 1500;
 let gameStarted = false;
@@ -272,14 +500,12 @@ window.addEventListener('mousedown', (e) => {
     if (!gameStarted || !localPlayerID) return;
     // Don't handle clicks on UI panels
     if (e.target.closest('#inventory-panel, #stats-panel, #item-detail, #start-screen')) return;
-    if (e.button === 2) {
+    if (e.button === 0) {
+        // 左键：移动
         network.send({ type: 'move', target_x: mouseWorldX, target_y: mouseWorldY });
         moveTargetIndicator = { x: mouseWorldX, y: mouseWorldY, life: 0.6 };
-    } else if (e.button === 0) {
-        network.sendCast('q', mouseWorldX, mouseWorldY);
-        sfx.resume();
-        sfx.slash();
     }
+    // 右键不再绑定攻击，仍由 contextmenu 逻辑屏蔽浏览器菜单
 });
 
 window.addEventListener('contextmenu', (e) => {
@@ -361,9 +587,11 @@ function updateHUD(p) {
     if (lastLevel !== null && p.level > lastLevel) sfx.levelUp();
     lastHP = p.hp;
     lastLevel = p.level;
-    document.getElementById('hp-bar').style.width = (p.hp / p.max_hp * 100) + '%';
+    const displayMaxHP = Math.round(p.max_hp * runTownBonus.hpMult);
+    const displayHP = Math.min(displayMaxHP, p.hp);
+    document.getElementById('hp-bar').style.width = (displayHP / displayMaxHP * 100) + '%';
     document.getElementById('mp-bar').style.width = (p.mp / p.max_mp * 100) + '%';
-    document.getElementById('hp-text').textContent = `${p.hp} / ${p.max_hp}`;
+    document.getElementById('hp-text').textContent = `${displayHP} / ${displayMaxHP}`;
     document.getElementById('mp-text').textContent = `${p.mp} / ${p.max_mp}`;
     document.getElementById('lv-val').textContent = p.level;
     document.getElementById('wave-val').textContent = lastWave;
@@ -376,10 +604,10 @@ function updateHUD(p) {
         document.getElementById('stat-name').textContent = p.name || '-';
         document.getElementById('stat-hero').textContent = heroNames[p.hero] || p.hero;
         document.getElementById('stat-level').textContent = p.level;
-        document.getElementById('stat-hp').textContent = `${p.hp} / ${p.max_hp}`;
+        document.getElementById('stat-hp').textContent = `${displayHP} / ${displayMaxHP}`;
         document.getElementById('stat-mp').textContent = `${p.mp} / ${p.max_mp}`;
-        document.getElementById('stat-atk').textContent = a.atk;
-        document.getElementById('stat-def').textContent = a.def;
+        document.getElementById('stat-atk').textContent = Math.round(a.atk * runTownBonus.atkMult);
+        document.getElementById('stat-def').textContent = Math.round(a.def * runTownBonus.defMult);
         document.getElementById('stat-atkspd').textContent = a.atk_speed.toFixed(2) + 'x';
         document.getElementById('stat-movespd').textContent = Math.round(a.move_speed);
         document.getElementById('stat-crit').textContent = (a.crit_rate * 100).toFixed(1) + '%';
@@ -426,10 +654,23 @@ function showWaveAnnounce(waveNum) {
 let lastTime = performance.now();
 let sendTickCounter = 0;
 let lastSentKeys = null;
+let loopStarted = false;
+let townResAccum = 0;
+let autoAttackAccum = 0;
 
 function gameLoop(now) {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
+
+    // Town resource ticking
+    if (mode === 'town' && townState) {
+        townResAccum += dt;
+        if (townResAccum >= 10) {
+            const ticks = Math.floor(townResAccum / 10);
+            townResAccum -= ticks * 10;
+            townApplyResourceTicks(ticks);
+        }
+    }
 
     if (gameStarted) {
         sendTickCounter++;
@@ -455,6 +696,17 @@ function gameLoop(now) {
                 target_y: mouseWorldY,
             });
         }
+
+        // 自动攻击：每 2 秒触发一次普通攻击
+        autoAttackAccum += dt;
+        while (autoAttackAccum >= 2.0) {
+            autoAttackAccum -= 2.0;
+            if (localPlayerID) {
+                network.sendCast('auto', mouseWorldX, mouseWorldY);
+                sfx.resume();
+                sfx.slash();
+            }
+        }
     }
 
     if (moveTargetIndicator) {
@@ -470,10 +722,35 @@ function gameLoop(now) {
     requestAnimationFrame(gameLoop);
 }
 
+function townApplyResourceTicks(ticks) {
+    if (!townState || ticks <= 0) return;
+    const b = townState.buildings;
+    const caps = townGetResourceCaps();
+    const r = townState.resources;
+
+    const addWood = townCalcYield('lumber', b.lumber) * ticks;
+    const addStone = townCalcYield('quarry', b.quarry) * ticks;
+    const addOre = townCalcYield('mine', b.mine) * ticks;
+
+    r.wood = Math.min(caps.wood, r.wood + addWood);
+    r.stone = Math.min(caps.stone, r.stone + addStone);
+    r.ore = Math.min(caps.ore, r.ore + addOre);
+
+    updateTownUI();
+}
+
+function startMainLoopOnce() {
+    if (loopStarted) return;
+    loopStarted = true;
+    lastTime = performance.now();
+    requestAnimationFrame(gameLoop);
+}
+
 // ==================== START ====================
 function selectHero(hero) {
     document.getElementById('start-screen').style.display = 'none';
     canvas.style.cursor = 'none';
+    townComputeRunBonus();
     sfx.init();
     sfx.resume();
     network.connect();
@@ -486,5 +763,11 @@ function selectHero(hero) {
         }
     };
     tryJoin();
-    requestAnimationFrame(gameLoop);
 }
+
+window.addEventListener('load', () => {
+    initTownState();
+    enterTownMode();
+    renderer.resize();
+    startMainLoopOnce();
+});
