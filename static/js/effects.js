@@ -199,6 +199,68 @@ const VFX = {
         }
     },
 
+    // ===== 普攻: 简单劈砍 - Basic Slash =====
+    slash_auto: {
+        init(effect, particles) {
+            const ang = effect.params.angle || 0;
+            const r = effect.params.radius || 70;
+            // 少量火花，整体比 Q 更克制
+            particles.emit(effect.x, effect.y, 10, {
+                angle: ang, spread: 0.8,
+                speed: 6, life: 0.25, size: 3,
+                colors: ['#ffaa00', '#fff'],
+                type: 'spark', friction: 0.9,
+            });
+            // 轻微屏幕震动
+            return { shakeAmount: 2 };
+        },
+        render(ctx, effect) {
+            const t = effect.age / effect.duration;
+            if (t > 1) return;
+
+            const ang = effect.params.angle || 0;
+            const baseR = effect.params.radius || 70;
+            const grow = Math.min(1, t * 5);
+            const r = baseR * grow;
+
+            ctx.save();
+            ctx.translate(effect.x, effect.y);
+            ctx.rotate(ang);
+
+            const alpha = 0.9 * (1 - t);
+            ctx.globalAlpha = alpha;
+
+            // 白色光晕：先画一层柔和的白色弧光，让剑轨更清晰
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = '#fff';
+            ctx.beginPath();
+            ctx.arc(0, 0, r, -0.45, 0.45);
+            ctx.lineWidth = 14 * (1 - t);
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.stroke();
+
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#ffaa00';
+
+            // 外层黄色细弧
+            ctx.beginPath();
+            ctx.arc(0, 0, r, -0.4, 0.4);
+            ctx.lineWidth = 4 * (1 - t);
+            ctx.strokeStyle = '#ffaa00';
+            ctx.stroke();
+
+            // 内层白色剑光线
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.7, -0.25, 0.25);
+            ctx.lineWidth = 2 * (1 - t);
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        },
+    },
+
     // ===== W: 盾击冲锋 - Shield Bash =====
     shield_bash: {
         init(effect, particles) {

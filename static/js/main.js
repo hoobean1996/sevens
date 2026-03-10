@@ -500,14 +500,12 @@ window.addEventListener('mousedown', (e) => {
     if (!gameStarted || !localPlayerID) return;
     // Don't handle clicks on UI panels
     if (e.target.closest('#inventory-panel, #stats-panel, #item-detail, #start-screen')) return;
-    if (e.button === 2) {
+    if (e.button === 0) {
+        // 左键：移动
         network.send({ type: 'move', target_x: mouseWorldX, target_y: mouseWorldY });
         moveTargetIndicator = { x: mouseWorldX, y: mouseWorldY, life: 0.6 };
-    } else if (e.button === 0) {
-        network.sendCast('q', mouseWorldX, mouseWorldY);
-        sfx.resume();
-        sfx.slash();
     }
+    // 右键不再绑定攻击，仍由 contextmenu 逻辑屏蔽浏览器菜单
 });
 
 window.addEventListener('contextmenu', (e) => {
@@ -658,6 +656,7 @@ let sendTickCounter = 0;
 let lastSentKeys = null;
 let loopStarted = false;
 let townResAccum = 0;
+let autoAttackAccum = 0;
 
 function gameLoop(now) {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
@@ -696,6 +695,17 @@ function gameLoop(now) {
                 target_x: mouseWorldX,
                 target_y: mouseWorldY,
             });
+        }
+
+        // 自动攻击：每 2 秒触发一次普通攻击
+        autoAttackAccum += dt;
+        while (autoAttackAccum >= 2.0) {
+            autoAttackAccum -= 2.0;
+            if (localPlayerID) {
+                network.sendCast('auto', mouseWorldX, mouseWorldY);
+                sfx.resume();
+                sfx.slash();
+            }
         }
     }
 

@@ -52,9 +52,16 @@ func (e *ActiveEffect) RecordHit(entityID string) {
 	e.HitSet[entityID] = e.Age
 }
 
-// WarriorSkills returns the 4 skills for the warrior hero
+// WarriorSkills returns the skills for the warrior hero
 func WarriorSkills() map[string]*SkillInstance {
 	defs := []*SkillDef{
+		{
+			ID: "warrior_auto", Name: "普通攻击", Slot: "auto",
+			MPCost: 0, Cooldown: 0.6, CastTime: 0.05,
+			EffectKind: "slash_auto", Damage: 30,
+			HitboxType: "circle", HitboxSize: 80,
+			Duration: 0.25, MultiHit: false, Knockback: 60,
+		},
 		{
 			ID: "warrior_q", Name: "裂空斩", Slot: "q",
 			MPCost: 15, Cooldown: 3, CastTime: 0.15,
