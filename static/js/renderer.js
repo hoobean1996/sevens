@@ -20,6 +20,10 @@ class Renderer {
         this.groundPattern = null;
         this.generateGround();
 
+        // Generate terrain obstacles (must match server seed=42)
+        this.terrainObstacles = [];
+        this._generateTerrain();
+
         // Stars for background
         this.bgStars = [];
         for (let i = 0; i < 100; i++) {
@@ -123,6 +127,9 @@ class Renderer {
         // Draw ground
         this.drawGround(ctx);
 
+        // Draw terrain obstacles (rocks, trees)
+        this.drawTerrain(ctx, performance.now() / 1000);
+
         // Draw map border
         ctx.strokeStyle = 'rgba(255,215,0,0.15)';
         ctx.lineWidth = 2;
@@ -222,6 +229,81 @@ class Renderer {
         }
     }
 
+    // Seeded RNG matching server xorshift64
+    _seededRNG(seed) {
+        let state = BigInt(seed || 1);
+        const mask = BigInt('0xFFFFFFFFFFFFFFFF');
+        return {
+            next() {
+                state ^= (state << 13n) & mask;
+                state ^= (state >> 7n) & mask;
+                state ^= (state << 17n) & mask;
+                state &= mask;
+                return state;
+            },
+            float64() {
+                return Number(this.next() % 1000000n) / 1000000;
+            }
+        };
+    }
+
+    _generateTerrain() {
+        const rng = this._seededRNG(42);
+        const mapW = 2000, mapH = 1500;
+
+        // Large rocks (12) - must match server terrain.go exactly
+        for (let i = 0; i < 12; i++) {
+            let x = 100 + rng.float64() * (mapW - 200);
+            let y = 100 + rng.float64() * (mapH - 200);
+            if (Math.abs(x - mapW/2) < 200 && Math.abs(y - mapH/2) < 200) {
+                x += 300;
+            }
+            const radius = 20 + rng.float64() * 10;
+            this.terrainObstacles.push({ x, y, radius, kind: 'rock' });
+        }
+
+        // Trees (20) - must match server terrain.go exactly
+        for (let i = 0; i < 20; i++) {
+            let x = 80 + rng.float64() * (mapW - 160);
+            let y = 80 + rng.float64() * (mapH - 160);
+            if (Math.abs(x - mapW/2) < 180 && Math.abs(y - mapH/2) < 180) {
+                y += 280;
+            }
+            this.terrainObstacles.push({ x, y, radius: 14, kind: 'tree' });
+        }
+
+        // Decorative elements (no collision, just visual)
+        this._terrainDecor = [];
+        // Grass patches
+        for (let i = 0; i < 40; i++) {
+            this._terrainDecor.push({
+                x: rng.float64() * mapW,
+                y: rng.float64() * mapH,
+                size: 20 + rng.float64() * 30,
+                kind: 'grass'
+            });
+        }
+        // Small stones (decorative)
+        for (let i = 0; i < 25; i++) {
+            this._terrainDecor.push({
+                x: rng.float64() * mapW,
+                y: rng.float64() * mapH,
+                size: 3 + rng.float64() * 5,
+                kind: 'pebble'
+            });
+        }
+        // Water puddles
+        for (let i = 0; i < 6; i++) {
+            let x = 150 + rng.float64() * (mapW - 300);
+            let y = 150 + rng.float64() * (mapH - 300);
+            this._terrainDecor.push({
+                x, y,
+                size: 30 + rng.float64() * 40,
+                kind: 'water'
+            });
+        }
+    }
+
     drawGround(ctx) {
         // Cache the full ground as one big canvas (only once)
         if (!this._groundCache) {
@@ -234,9 +316,161 @@ class Renderer {
                     gctx.drawImage(this.groundTile, x, y);
                 }
             }
+
+            // Draw decorations onto ground cache
+            this._drawDecorToGround(gctx);
+
             this._groundCache = gc;
         }
         ctx.drawImage(this._groundCache, 0, 0);
+    }
+
+    _drawDecorToGround(ctx) {
+        // Grass patches
+        for (const d of this._terrainDecor) {
+            if (d.kind === 'grass') {
+                ctx.save();
+                ctx.translate(d.x, d.y);
+                for (let i = 0; i < 6; i++) {
+                    const angle = (i / 6) * Math.PI * 2 + d.x * 0.1;
+                    const dist = d.size * 0.3;
+                    const bx = Math.cos(angle) * dist;
+                    const by = Math.sin(angle) * dist;
+                    ctx.strokeStyle = `rgba(${30+Math.floor(d.size)},${60+Math.floor(d.size*1.5)},${20},0.4)`;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(bx, by);
+                    ctx.quadraticCurveTo(bx + 2, by - d.size*0.3, bx - 1, by - d.size*0.5);
+                    ctx.stroke();
+                }
+                ctx.restore();
+            } else if (d.kind === 'pebble') {
+                ctx.fillStyle = `rgba(40,44,55,0.5)`;
+                ctx.beginPath();
+                ctx.ellipse(d.x, d.y, d.size, d.size * 0.7, d.x * 0.3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = `rgba(55,60,72,0.3)`;
+                ctx.beginPath();
+                ctx.ellipse(d.x - 1, d.y - 1, d.size * 0.6, d.size * 0.4, 0, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (d.kind === 'water') {
+                // Water puddle
+                const grad = ctx.createRadialGradient(d.x, d.y, 0, d.x, d.y, d.size);
+                grad.addColorStop(0, 'rgba(30,60,100,0.35)');
+                grad.addColorStop(0.7, 'rgba(20,45,80,0.2)');
+                grad.addColorStop(1, 'rgba(15,30,50,0)');
+                ctx.fillStyle = grad;
+                ctx.beginPath();
+                ctx.ellipse(d.x, d.y, d.size * 1.2, d.size, d.y * 0.01, 0, Math.PI * 2);
+                ctx.fill();
+                // Water highlight
+                ctx.fillStyle = 'rgba(80,140,200,0.1)';
+                ctx.beginPath();
+                ctx.ellipse(d.x - d.size*0.2, d.y - d.size*0.15, d.size*0.4, d.size*0.2, -0.3, 0, Math.PI*2);
+                ctx.fill();
+            }
+        }
+    }
+
+    drawTerrain(ctx, time) {
+        for (const obs of this.terrainObstacles) {
+            if (obs.kind === 'rock') {
+                this._drawRock(ctx, obs, time);
+            } else if (obs.kind === 'tree') {
+                this._drawTree(ctx, obs, time);
+            }
+        }
+    }
+
+    _drawRock(ctx, obs, time) {
+        const { x, y, radius } = obs;
+        ctx.save();
+        ctx.translate(x, y);
+
+        // Shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.ellipse(3, radius * 0.6, radius * 1.1, radius * 0.4, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Main rock body
+        const grad = ctx.createRadialGradient(-radius*0.3, -radius*0.3, 0, 0, 0, radius);
+        grad.addColorStop(0, '#6a6a72');
+        grad.addColorStop(0.6, '#4a4a52');
+        grad.addColorStop(1, '#333338');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        // Irregular rock shape
+        for (let i = 0; i <= 8; i++) {
+            const ang = (i / 8) * Math.PI * 2;
+            const r = radius * (0.85 + Math.sin(ang * 3 + x) * 0.15);
+            const px = Math.cos(ang) * r;
+            const py = Math.sin(ang) * r * 0.8;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        // Highlight
+        ctx.fillStyle = 'rgba(180,180,190,0.15)';
+        ctx.beginPath();
+        ctx.ellipse(-radius*0.25, -radius*0.25, radius*0.4, radius*0.25, -0.5, 0, Math.PI*2);
+        ctx.fill();
+
+        // Cracks
+        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-radius*0.3, -radius*0.1);
+        ctx.lineTo(radius*0.2, radius*0.15);
+        ctx.moveTo(radius*0.1, -radius*0.3);
+        ctx.lineTo(radius*0.05, radius*0.1);
+        ctx.stroke();
+
+        ctx.restore();
+    }
+
+    _drawTree(ctx, obs, time) {
+        const { x, y, radius } = obs;
+        ctx.save();
+        ctx.translate(x, y);
+
+        // Tree shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath();
+        ctx.ellipse(4, 12, 22, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Trunk
+        ctx.fillStyle = '#4a3520';
+        ctx.fillRect(-4, -5, 8, 20);
+        // Trunk detail
+        ctx.fillStyle = '#3a2815';
+        ctx.fillRect(-2, -3, 2, 16);
+
+        // Tree crown (layered circles for depth)
+        const sway = Math.sin(time * 0.5 + x * 0.01) * 1.5;
+        const layers = [
+            { ox: 0, oy: -18, r: 20, c: '#1a4a1a' },
+            { ox: -8+sway, oy: -24, r: 16, c: '#226622' },
+            { ox: 8+sway, oy: -22, r: 14, c: '#1e5a1e' },
+            { ox: sway*0.5, oy: -30, r: 12, c: '#2a7a2a' },
+        ];
+        for (const l of layers) {
+            ctx.fillStyle = l.c;
+            ctx.beginPath();
+            ctx.arc(l.ox, l.oy, l.r, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Leaf highlights
+        ctx.fillStyle = 'rgba(60,180,60,0.2)';
+        ctx.beginPath();
+        ctx.arc(-3+sway, -28, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
     }
 
     drawPlayers(ctx, players, localID) {

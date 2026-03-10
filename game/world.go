@@ -330,6 +330,23 @@ func (w *World) resolveCollisions() {
 		}
 	}
 
+	// Player vs Obstacles (obstacles are immovable)
+	for _, p := range players {
+		for _, obs := range MapObstacles {
+			resolveStaticCircleCollision(&p.Position, PlayerRadius, obs.Position, obs.Radius)
+		}
+	}
+
+	// Enemy vs Obstacles
+	for _, e := range w.Enemies {
+		if e.Dead {
+			continue
+		}
+		for _, obs := range MapObstacles {
+			resolveStaticCircleCollision(&e.Position, e.Kind.Radius, obs.Position, obs.Radius)
+		}
+	}
+
 	// Clamp all to map bounds after collision
 	for _, p := range players {
 		p.Position.X = math.Max(PlayerRadius, math.Min(MapWidth-PlayerRadius, p.Position.X))
@@ -341,6 +358,22 @@ func (w *World) resolveCollisions() {
 			e.Position.Y = math.Max(e.Kind.Radius, math.Min(MapHeight-e.Kind.Radius, e.Position.Y))
 		}
 	}
+}
+
+// resolveStaticCircleCollision pushes a moving circle away from a static obstacle
+func resolveStaticCircleCollision(pos *Vec2, r float64, obsPos Vec2, obsR float64) {
+	dx := pos.X - obsPos.X
+	dy := pos.Y - obsPos.Y
+	dist := math.Sqrt(dx*dx + dy*dy)
+	minDist := r + obsR
+	if dist >= minDist || dist < 0.001 {
+		return
+	}
+	overlap := minDist - dist
+	nx := dx / dist
+	ny := dy / dist
+	pos.X += nx * overlap
+	pos.Y += ny * overlap
 }
 
 // resolveCircleCollision pushes two circles apart if overlapping (each pushed half)
