@@ -1,0 +1,82 @@
+.town-screen {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at 50% 30%, #181830 0%, #080810 70%);
+  display: flex; flex-direction: column; align-items: center;
+  z-index: 250; color: #ddd; overflow-y: auto;
+}
+.town-top {
+  width: 100%; text-align: center; padding: 28px 0 0;
+  background: linear-gradient(180deg, rgba(255,215,0,0.04) 0%, transparent 100%);
+}
+.town-title {
+  font-size: 36px; color: #ffd700; letter-spacing: 6px;
+  text-shadow: 0 0 24px rgba(255,215,0,0.4), 0 2px 0 #7a5a0b;
+  margin-bottom: 4px;
+}
+.town-subtitle { color: #666; font-size: 13px; letter-spacing: 4px; margin-bottom: 16px; }
+.town-resources {
+  display: inline-flex; gap: 16px; padding: 6px 20px;
+  border-radius: 999px; border: 1px solid rgba(255,215,0,0.2);
+  background: rgba(0,0,0,0.4); font-size: 13px; color: #aaa;
+}
+.town-resources span { color: #ffd700; font-weight: bold; }
+.town-center {
+  flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+  padding: 32px 0 24px;
+}
+.town-start-btn {
+  padding: 16px 52px; border-radius: 999px;
+  border: 2px solid rgba(255,180,0,0.6);
+  font-size: 20px; font-weight: bold; letter-spacing: 6px; cursor: pointer;
+  background: linear-gradient(135deg, #ff8c00, #ff5500);
+  color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  box-shadow: 0 0 40px rgba(255,140,0,0.4), 0 4px 20px rgba(0,0,0,0.4);
+  transition: 0.3s;
+}
+.town-start-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0 60px rgba(255,180,0,0.6), 0 6px 30px rgba(0,0,0,0.4);
+  background: linear-gradient(135deg, #ffa020, #ff6600);
+}
+.town-start-hint { margin-top: 10px; font-size: 12px; color: #555; letter-spacing: 2px; }
+.town-buildings { max-width: 720px; width: 100%; padding: 0 24px 24px; }
+.town-buildings h3 {
+  font-size: 12px; color: #ffd700; letter-spacing: 3px;
+  margin-bottom: 10px; text-align: center; position: relative;
+}
+.town-buildings h3::before, .town-buildings h3::after {
+  content: ''; position: absolute; top: 50%;
+  width: 60px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,215,0,0.3));
+}
+.town-buildings h3::before { right: calc(50% + 60px); }
+.town-buildings h3::after { left: calc(50% + 60px); transform: scaleX(-1); }
+.town-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px; margin-bottom: 16px;
+}
+.town-building-card {
+  border-radius: 8px; border: 1px solid #2a2a3a;
+  background: rgba(255,255,255,0.02);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+  transition: 0.2s;
+}
+.town-building-card:hover { border-color: #444; background: rgba(255,255,255,0.04); }
+.town-building-card.locked { opacity: 0.35; }
+.town-building-header {
+  display: flex; justify-content: space-between; align-items: center; font-size: 13px;
+}
+.town-building-name { display: flex; align-items: center; gap: 6px; }
+.town-building-name .icon { font-size: 18px; }
+.town-building-level { font-size: 11px; color: #ffd700; }
+.town-building-desc { font-size: 11px; color: #666; line-height: 1.4; }
+.town-building-actions { display: flex; justify-content: flex-end; margin-top: 2px; }
+.town-upgrade-btn {
+  padding: 2px 10px; font-size: 11px; border-radius: 999px;
+  border: 1px solid #ffd700; background: rgba(255,215,0,0.08);
+  color: #ffd700; cursor: pointer; transition: 0.2s;
+}
+.town-upgrade-btn:hover { background: rgba(255,215,0,0.18); }
+.town-footer {
+  padding: 12px 0 20px; text-align: center; font-size: 11px; color: #444;
+}

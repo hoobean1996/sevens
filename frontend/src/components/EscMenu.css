@@ -1,0 +1,25 @@
+.esc-menu-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  z-index: 300; display: flex; align-items: center; justify-content: center;
+}
+.esc-menu {
+  width: 320px; background: rgba(10,10,25,0.97);
+  border: 2px solid #ffd700; border-radius: 14px;
+  box-shadow: 0 0 60px rgba(255,215,0,0.2);
+  padding: 30px 24px; text-align: center; color: #ddd;
+}
+.esc-menu h2 { font-size: 22px; color: #ffd700; letter-spacing: 4px; margin-bottom: 24px; }
+.esc-btn {
+  display: block; width: 100%; padding: 12px 0; margin-bottom: 10px;
+  border: 1px solid #555; border-radius: 8px;
+  background: rgba(255,255,255,0.04); color: #ddd;
+  font-size: 15px; cursor: pointer; transition: 0.2s; letter-spacing: 2px;
+}
+.esc-btn:hover { background: rgba(255,215,0,0.1); border-color: #ffd700; color: #fff; }
+.esc-btn.danger { color: #f44; border-color: #a33; }
+.esc-btn.danger:hover { background: rgba(255,68,68,0.1); border-color: #f44; }
+.esc-volume {
+  display: flex; align-items: center; gap: 10px; justify-content: center;
+  margin: 16px 0 6px; font-size: 13px; color: #999;
+}
+.esc-volume input[type=range] { width: 140px; accent-color: #ffd700; }

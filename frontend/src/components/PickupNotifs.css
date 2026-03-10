@@ -1,0 +1,18 @@
+.pickup-notifs {
+  position: fixed; bottom: 90px; left: 20px;
+  z-index: 50; pointer-events: none;
+  display: flex; flex-direction: column-reverse; gap: 4px;
+}
+.pickup-notif {
+  font-size: 14px; font-weight: bold;
+  padding: 4px 12px; border-radius: 4px;
+  background: rgba(0,0,0,0.6);
+  border-left: 3px solid currentColor;
+  animation: pickupSlide 0.3s ease-out;
+  white-space: nowrap;
+  transition: opacity 0.5s;
+}
+@keyframes pickupSlide {
+  from { transform: translateX(-30px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}

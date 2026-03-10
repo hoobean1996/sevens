@@ -1,0 +1,29 @@
+.hud {
+  position: fixed; top: 0; left: 0; right: 0;
+  pointer-events: none; z-index: 10; padding: 10px 15px;
+}
+.hud-top { display: flex; align-items: center; gap: 15px; }
+.hud-portrait {
+  width: 50px; height: 50px; border: 2px solid #ffd700; border-radius: 8px;
+  background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center;
+  font-size: 28px;
+}
+.hud-bars { flex: 1; max-width: 300px; }
+.hud-bar {
+  height: 16px; background: rgba(0,0,0,0.6); border-radius: 3px; margin-bottom: 3px;
+  position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);
+}
+.hud-bar-fill { height: 100%; transition: width 0.1s; border-radius: 2px; }
+.hud-bar-text {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: #fff; text-shadow: 0 1px 2px #000;
+}
+.hp-fill { background: linear-gradient(180deg, #e44, #a00); }
+.mp-fill { background: linear-gradient(180deg, #44f, #00a); }
+.xp-fill { background: linear-gradient(180deg, #4f4, #0a0); }
+.hud-info {
+  display: flex; gap: 15px; margin-left: 10px; font-size: 13px; color: #ccc;
+  align-items: center;
+}
+.hud-info span { color: #ffd700; }

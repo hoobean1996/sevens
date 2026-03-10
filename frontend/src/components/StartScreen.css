@@ -1,0 +1,46 @@
+.start-screen {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at 50% 35%, #1a1a3a 0%, #0a0a12 70%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 200; color: #ddd;
+}
+.start-bg-deco {
+  position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+}
+.start-bg-deco::before {
+  content: ''; position: absolute;
+  top: 15%; left: 50%; transform: translateX(-50%);
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(255,215,0,0.06) 0%, transparent 70%);
+  border-radius: 50%;
+}
+.start-screen h1 {
+  font-size: 72px; color: #ffd700; letter-spacing: 8px;
+  text-shadow: 0 0 40px rgba(255,215,0,0.4), 0 4px 0 #b8860b;
+  margin-bottom: 4px; position: relative;
+}
+.start-screen .subtitle {
+  color: #666; font-size: 16px; letter-spacing: 8px; margin-bottom: 48px;
+  position: relative;
+}
+.hero-select {
+  display: flex; gap: 16px; margin-bottom: 36px;
+  flex-wrap: wrap; justify-content: center; position: relative;
+}
+.hero-card {
+  width: 160px; padding: 18px 14px; border: 2px solid #2a2a3a; border-radius: 10px;
+  background: rgba(255,255,255,0.02); cursor: pointer; text-align: center;
+  transition: 0.3s; position: relative; color: #ddd;
+}
+.hero-card:hover {
+  border-color: #ffd700; background: rgba(255,215,0,0.05);
+  transform: translateY(-4px); box-shadow: 0 8px 30px rgba(255,215,0,0.15);
+}
+.hero-card .hero-icon { font-size: 40px; margin-bottom: 8px; }
+.hero-card h3 { font-size: 15px; margin-bottom: 5px; }
+.hero-card p { color: #555; font-size: 11px; line-height: 1.5; }
+.hero-card.locked { opacity: 0.25; cursor: not-allowed; pointer-events: none; }
+.hero-card.locked::after {
+  content: '🔒'; position: absolute; top: 8px; right: 10px; font-size: 14px;
+}
+.controls-hint { color: #444; font-size: 12px; letter-spacing: 1px; }
