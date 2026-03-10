@@ -18,22 +18,7 @@ func main() {
 	world := game.NewWorld()
 	go world.Run()
 
-	// Serve React build (frontend/build) with SPA fallback
-	buildDir := "./frontend/build"
-	fs := http.FileServer(http.Dir(buildDir))
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Try serving the file directly; if not found, serve index.html (SPA)
-		if r.URL.Path != "/" {
-			if _, err := http.Dir(buildDir).Open(r.URL.Path); err != nil {
-				// File not found — serve index.html for client-side routing
-				http.ServeFile(w, r, buildDir+"/index.html")
-				return
-			}
-		}
-		fs.ServeHTTP(w, r)
-	})
-
-	// WebSocket endpoint
+	// WebSocket endpoint (register BEFORE "/" catch-all)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -42,6 +27,19 @@ func main() {
 		}
 		log.Printf("New WebSocket connection from %s", r.RemoteAddr)
 		world.HandleConnection(conn)
+	})
+
+	// Serve React build (frontend/build) with SPA fallback
+	buildDir := "./frontend/build"
+	fs := http.FileServer(http.Dir(buildDir))
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			if _, err := http.Dir(buildDir).Open(r.URL.Path); err != nil {
+				http.ServeFile(w, r, buildDir+"/index.html")
+				return
+			}
+		}
+		fs.ServeHTTP(w, r)
 	})
 
 	port := "8080"

@@ -93,8 +93,8 @@ class Renderer {
             this.targetCamera.y = localPlayer.y;
         }
 
-        // Smooth camera with dt-based lerp (frame-rate independent)
-        const camSpeed = 4.0 * dt; // ~4% per second-equivalent
+        // Smooth camera - tight follow to reduce motion sickness
+        const camSpeed = 1 - Math.pow(0.0001, dt); // ~92% catch-up per frame
         this.camera.x += (this.targetCamera.x - this.camera.x) * camSpeed;
         this.camera.y += (this.targetCamera.y - this.camera.y) * camSpeed;
 
