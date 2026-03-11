@@ -1,4 +1,4 @@
-import { GameState, JoinedMessage, PickupMessage } from './types';
+import { GameState, JoinedMessage, PickupMessage, ShopResultMessage } from './types';
 
 export type MessageHandler<T> = (msg: T) => void;
 
@@ -9,6 +9,7 @@ export class Network {
   onJoined: MessageHandler<JoinedMessage> | null = null;
   onEvent: MessageHandler<any> | null = null;
   onPickup: MessageHandler<PickupMessage> | null = null;
+  onShopResult: MessageHandler<ShopResultMessage> | null = null;
   private messageQueue: any[] = [];
 
   connect() {
@@ -42,6 +43,9 @@ export class Network {
             break;
           case 'pickup_ok':
             this.onPickup?.(msg);
+            break;
+          case 'shop_result':
+            this.onShopResult?.(msg);
             break;
         }
       } catch (e) {
@@ -78,5 +82,9 @@ export class Network {
 
   sendJoin(hero: string, name: string) {
     this.send({ type: 'join', hero, name });
+  }
+
+  sendShopBuy(shopId: string, itemId: string) {
+    this.send({ type: 'shop_buy', shop_id: shopId, item_id: itemId });
   }
 }

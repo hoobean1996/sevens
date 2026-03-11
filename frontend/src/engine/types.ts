@@ -22,6 +22,7 @@ export interface PlayerState {
   anim: string;
   anim_frame: number;
   level: number;
+  gold: number;
   skills: Record<string, SkillState>;
   attrs: Attributes;
   equipped?: Record<string, Equipment>;
@@ -121,6 +122,45 @@ export interface GameState {
   effects: EffectState[];
   drops: GroundDrop[];
   damage_nums: DamageNumber[];
+  // Arena mode fields
+  arena_mode?: boolean;
+  shop_phase?: boolean;
+  shop_timer?: number;
+  shops?: ShopState[];
+}
+
+// Shop types for arena mode
+export interface ShopState {
+  id: string;
+  name: string;
+  type: string; // weapon, armor, potion, upgrade
+  x: number;
+  y: number;
+  items: ShopItem[];
+}
+
+export interface ShopItem {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  rarity: string;
+  item_type: string; // equipment, potion, upgrade
+  slot?: string;
+  // Stats for equipment
+  atk?: number;
+  def?: number;
+  atk_speed?: number;
+  crit_rate?: number;
+  crit_dmg?: number;
+  life_steal?: number;
+  hp_regen?: number;
+  // Potion effects
+  heal_hp?: number;
+  heal_mp?: number;
+  // Upgrade effects
+  max_hp_bonus?: number;
+  atk_bonus?: number;
 }
 
 export interface JoinedMessage {
@@ -128,6 +168,13 @@ export interface JoinedMessage {
   player_id: string;
   map_width: number;
   map_height: number;
+  arena_mode?: boolean;
+}
+
+export interface ShopResultMessage {
+  type: 'shop_result';
+  success: boolean;
+  message: string;
 }
 
 export interface PickupMessage {
@@ -169,6 +216,22 @@ export interface TownBonus {
 
 export const RARITY_NAMES = ['普通', '优秀', '稀有', '史诗', '传说'];
 export const RARITY_COLORS = ['#cccccc', '#44ff44', '#4488ff', '#bb44ff', '#ff8800'];
+
+// String rarity to color mapping (for shop items)
+export const RARITY_STRING_COLORS: Record<string, string> = {
+  common: '#cccccc',
+  uncommon: '#44ff44',
+  rare: '#4488ff',
+  epic: '#bb44ff',
+  legendary: '#ff8800',
+};
+
+export const SHOP_ICONS: Record<string, string> = {
+  weapon: '⚔️',
+  armor: '🛡️',
+  potion: '🧪',
+  upgrade: '🔨',
+};
 export const SLOT_NAMES: Record<string, string> = {
   weapon: '武器', armor: '铠甲', helmet: '头盔',
   boots: '战靴', ring: '戒指', amulet: '项链',

@@ -3,20 +3,21 @@ package game
 import "math"
 
 type EnemyKind struct {
-	Name   string
-	HP     int
-	Speed  float64
-	Damage int
-	XP     int
-	Score  int
-	Radius float64 // collision radius
+	Name     string
+	HP       int
+	Speed    float64
+	Damage   int
+	XP       int
+	Score    int
+	Radius   float64 // collision radius
+	GoldDrop int     // gold dropped on kill
 }
 
 var EnemyKinds = map[string]EnemyKind{
-	"skeleton": {Name: "skeleton", HP: 120, Speed: 80, Damage: 15, XP: 10, Score: 20, Radius: 16},
-	"orc":      {Name: "orc", HP: 200, Speed: 60, Damage: 25, XP: 20, Score: 40, Radius: 20},
-	"demon":    {Name: "demon", HP: 350, Speed: 100, Damage: 35, XP: 35, Score: 70, Radius: 20},
-	"boss":     {Name: "boss", HP: 2000, Speed: 50, Damage: 60, XP: 200, Score: 500, Radius: 32},
+	"skeleton": {Name: "skeleton", HP: 120, Speed: 80, Damage: 15, XP: 10, Score: 20, Radius: 16, GoldDrop: 5},
+	"orc":      {Name: "orc", HP: 200, Speed: 60, Damage: 25, XP: 20, Score: 40, Radius: 20, GoldDrop: 12},
+	"demon":    {Name: "demon", HP: 350, Speed: 100, Damage: 35, XP: 35, Score: 70, Radius: 20, GoldDrop: 25},
+	"boss":     {Name: "boss", HP: 2000, Speed: 50, Damage: 60, XP: 200, Score: 500, Radius: 32, GoldDrop: 100},
 }
 
 type Enemy struct {
@@ -114,10 +115,7 @@ func (e *Enemy) Update(dt float64, players []*Player) {
 			e.AITimer = 0
 		}
 	}
-
-	// Clamp to map
-	e.Position.X = math.Max(0, math.Min(2000, e.Position.X))
-	e.Position.Y = math.Max(0, math.Min(1500, e.Position.Y))
+	// Note: map clamping is done in world.go resolveCollisions
 }
 
 func (e *Enemy) TakeDamage(dmg int, knockbackDir Vec2, knockbackForce float64) bool {

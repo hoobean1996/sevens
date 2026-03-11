@@ -29,6 +29,10 @@ class Renderer {
         this.terrainObstacles = [];
         this._generateTerrain();
 
+        // Arena mode ground cache
+        this._arenaGroundCache = null;
+        this.arenaMode = false;
+
         // Stars for background
         this.bgStars = [];
         for (let i = 0; i < 100; i++) {
@@ -230,16 +234,28 @@ class Renderer {
         }
         ctx.globalAlpha = 1;
 
-        // Draw ground
-        this.drawGround(ctx);
+        // Check arena mode from game state
+        const isArena = gameState.arena_mode || false;
+        this.arenaMode = isArena;
 
-        // Draw terrain obstacles (rocks, trees)
-        this.drawTerrain(ctx, performance.now() / 1000);
+        // Draw ground
+        if (isArena) {
+            this.drawArenaGround(ctx, gameState.map_width || 800, gameState.map_height || 600);
+        } else {
+            this.drawGround(ctx);
+            // Draw terrain obstacles (rocks, trees) - only in classic mode
+            this.drawTerrain(ctx, performance.now() / 1000);
+        }
 
         // Draw map border
-        ctx.strokeStyle = 'rgba(255,215,0,0.15)';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = isArena ? 'rgba(255,100,50,0.4)' : 'rgba(255,215,0,0.15)';
+        ctx.lineWidth = isArena ? 4 : 2;
         ctx.strokeRect(0, 0, gameState.map_width || 2000, gameState.map_height || 1500);
+
+        // Draw shops in arena mode
+        if (isArena && gameState.shops) {
+            this.drawShops(ctx, gameState.shops, gameState.shop_phase || false, localPlayer);
+        }
 
         // Draw ground effects (below entities)
         this.drawEffects(ctx, gameState.effects, dt, 'below');
@@ -269,8 +285,8 @@ class Renderer {
             this.drawMoveTarget(ctx, moveTarget);
         }
 
-        // Draw cursor target
-        if (localPlayer) {
+        // Draw cursor target (only in classic mode)
+        if (localPlayer && !isArena) {
             this.drawCrosshair(ctx, mouseWorldX, mouseWorldY);
 
             // Draw direction indicator line from player to mouse
@@ -429,6 +445,150 @@ class Renderer {
             this._groundCache = gc;
         }
         ctx.drawImage(this._groundCache, 0, 0);
+    }
+
+    drawArenaGround(ctx, mapW, mapH) {
+        // Cache the arena ground
+        if (!this._arenaGroundCache || this._arenaGroundW !== mapW || this._arenaGroundH !== mapH) {
+            const gc = document.createElement('canvas');
+            gc.width = mapW; gc.height = mapH;
+            const gctx = gc.getContext('2d');
+
+            // Dark stone floor with grid pattern
+            const ts = 40;
+            for (let x = 0; x < mapW; x += ts) {
+                for (let y = 0; y < mapH; y += ts) {
+                    const ix = Math.floor(x / ts);
+                    const iy = Math.floor(y / ts);
+                    gctx.fillStyle = (ix + iy) % 2 === 0 ? '#1a1c24' : '#16181f';
+                    gctx.fillRect(x, y, ts, ts);
+
+                    // Grid lines
+                    gctx.strokeStyle = '#252830';
+                    gctx.lineWidth = 1;
+                    gctx.strokeRect(x, y, ts, ts);
+                }
+            }
+
+            // Add some texture noise
+            for (let i = 0; i < 100; i++) {
+                gctx.fillStyle = `rgba(${30 + Math.random()*20},${32 + Math.random()*20},${38 + Math.random()*20},0.3)`;
+                const rx = Math.random() * mapW;
+                const ry = Math.random() * mapH;
+                gctx.fillRect(rx, ry, Math.random()*6+2, Math.random()*6+2);
+            }
+
+            // Draw corner decorations (shop zones)
+            const cornerSize = 70;
+            const corners = [
+                { x: 0, y: 0 },
+                { x: mapW - cornerSize, y: 0 },
+                { x: 0, y: mapH - cornerSize },
+                { x: mapW - cornerSize, y: mapH - cornerSize }
+            ];
+            for (const c of corners) {
+                gctx.fillStyle = 'rgba(60, 50, 40, 0.3)';
+                gctx.fillRect(c.x, c.y, cornerSize, cornerSize);
+                gctx.strokeStyle = 'rgba(100, 80, 60, 0.5)';
+                gctx.lineWidth = 2;
+                gctx.strokeRect(c.x + 2, c.y + 2, cornerSize - 4, cornerSize - 4);
+            }
+
+            // Center arena marker
+            const cx = mapW / 2, cy = mapH / 2;
+            gctx.strokeStyle = 'rgba(100, 60, 60, 0.3)';
+            gctx.lineWidth = 2;
+            gctx.beginPath();
+            gctx.arc(cx, cy, 60, 0, Math.PI * 2);
+            gctx.stroke();
+            gctx.beginPath();
+            gctx.arc(cx, cy, 120, 0, Math.PI * 2);
+            gctx.stroke();
+
+            this._arenaGroundCache = gc;
+            this._arenaGroundW = mapW;
+            this._arenaGroundH = mapH;
+        }
+        ctx.drawImage(this._arenaGroundCache, 0, 0);
+    }
+
+    drawShops(ctx, shops, shopPhase, localPlayer) {
+        const shopIcons = {
+            weapon: '⚔️',
+            armor: '🛡️',
+            potion: '🧪',
+            upgrade: '🔨'
+        };
+
+        for (const shop of shops) {
+            ctx.save();
+            ctx.translate(shop.x, shop.y);
+
+            // Check if player is near
+            let isNear = false;
+            if (localPlayer) {
+                const dx = localPlayer.x - shop.x;
+                const dy = localPlayer.y - shop.y;
+                isNear = Math.sqrt(dx*dx + dy*dy) < 80;
+            }
+
+            // Shop platform
+            const pulseAlpha = shopPhase ? 0.4 + Math.sin(performance.now() * 0.005) * 0.2 : 0.3;
+            ctx.fillStyle = `rgba(80, 65, 50, ${pulseAlpha})`;
+            ctx.beginPath();
+            ctx.ellipse(0, 0, 35, 20, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Glow ring when shop phase active
+            if (shopPhase) {
+                ctx.strokeStyle = isNear ? 'rgba(255, 215, 0, 0.8)' : 'rgba(255, 180, 100, 0.5)';
+                ctx.lineWidth = isNear ? 3 : 2;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 38, 22, 0, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Shop stand/building
+            ctx.fillStyle = '#5a4a3a';
+            ctx.fillRect(-15, -30, 30, 25);
+            ctx.fillStyle = '#6a5a4a';
+            ctx.fillRect(-18, -32, 36, 5);
+
+            // Roof
+            ctx.fillStyle = '#8a3030';
+            ctx.beginPath();
+            ctx.moveTo(-22, -32);
+            ctx.lineTo(0, -48);
+            ctx.lineTo(22, -32);
+            ctx.closePath();
+            ctx.fill();
+
+            // Shop icon
+            ctx.font = '20px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(shopIcons[shop.type] || '🏪', 0, -18);
+
+            // Shop name
+            ctx.font = 'bold 10px sans-serif';
+            ctx.fillStyle = shopPhase ? '#ffd700' : '#aaa';
+            ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+            ctx.lineWidth = 2;
+            ctx.strokeText(shop.name, 0, 12);
+            ctx.fillText(shop.name, 0, 12);
+
+            // [E] hint when near and in shop phase
+            if (isNear && shopPhase) {
+                ctx.font = 'bold 12px sans-serif';
+                ctx.fillStyle = '#ffd700';
+                ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+                ctx.lineWidth = 3;
+                ctx.strokeText('[E] 购物', 0, 30);
+                ctx.fillText('[E] 购物', 0, 30);
+            }
+
+            ctx.restore();
+        }
     }
 
     _drawDecorToGround(ctx) {

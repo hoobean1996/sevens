@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { GameEngine, GameMode } from './engine/GameEngine';
-import { PlayerState, TownState } from './engine/types';
+import { PlayerState, TownState, ShopState } from './engine/types';
 import StartScreen from './components/StartScreen';
 import TownScreen from './components/TownScreen';
 import HUD from './components/HUD';
@@ -10,6 +10,7 @@ import StatsPanel from './components/StatsPanel';
 import EscMenu from './components/EscMenu';
 import WaveAnnounce from './components/WaveAnnounce';
 import PickupNotifs from './components/PickupNotifs';
+import ShopPanel from './components/ShopPanel';
 
 function App() {
   const mainCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,13 +33,23 @@ function App() {
   const [pickupEvent, setPickupEvent] = useState<{ name: string; rarity: number; slot: string } | null>(null);
   const pickupCounter = useRef(0);
 
+  // Arena mode state
+  const [arenaMode, setArenaMode] = useState(false);
+  const [shopPhase, setShopPhase] = useState(false);
+  const [shopTimer, setShopTimer] = useState(0);
+  const [activeShop, setActiveShop] = useState<ShopState | null>(null);
+  const [showShopPanel, setShowShopPanel] = useState(false);
+
   // Initialize engine once
   useEffect(() => {
     const engine = new GameEngine({
       onModeChange: (m) => setMode(m),
-      onHUDUpdate: (p, w) => {
+      onHUDUpdate: (p, w, arena, shopPh, shopTm) => {
         setPlayer({ ...p });
         setWave(w);
+        setArenaMode(arena || false);
+        setShopPhase(shopPh || false);
+        setShopTimer(shopTm || 0);
       },
       onWaveAnnounce: (w) => setAnnounceWave(w),
       onPickup: (name, rarity, slot) => {
@@ -51,6 +62,14 @@ function App() {
         setResourceCaps({ ...caps });
       },
       onTownSelectionChange: (key) => setSelectedBuildingKey(key),
+      onShopOpen: (shop) => {
+        setActiveShop(shop);
+        setShowShopPanel(true);
+      },
+      onShopResult: (success, message) => {
+        // Could show a toast notification here
+        console.log('Shop result:', success, message);
+      },
     });
 
     engine.initTownState();
@@ -139,6 +158,7 @@ function App() {
       setShowInventory(engine.inventoryOpen);
       setShowStats(engine.statsPanelOpen);
       setShowEscMenu(engine.escMenuOpen);
+      setShowShopPanel(engine.shopPanelOpen);
     };
     const onKeyUp = (e: KeyboardEvent) => engine.handleKeyUp(e);
     const onMouseMove = (e: MouseEvent) => engine.handleMouseMove(e);
@@ -245,7 +265,14 @@ function App() {
 
       {mode === 'run' && (
         <>
-          <HUD player={player} wave={wave} townBonus={townBonus} />
+          <HUD
+            player={player}
+            wave={wave}
+            townBonus={townBonus}
+            arenaMode={arenaMode}
+            shopPhase={shopPhase}
+            shopTimer={shopTimer}
+          />
           <SkillBar player={player} />
           <WaveAnnounce wave={announceWave} />
           <PickupNotifs pickupEvent={pickupEvent} />
@@ -287,6 +314,21 @@ function App() {
                 if (engineRef.current) engineRef.current.inventoryOpen = true;
               }}
               onBackToTown={handleBackToTown}
+            />
+          )}
+
+          {showShopPanel && activeShop && (
+            <ShopPanel
+              shop={activeShop}
+              playerGold={player?.gold || 0}
+              onBuy={(shopId, itemId) => {
+                engineRef.current?.network.sendShopBuy(shopId, itemId);
+              }}
+              onClose={() => {
+                setShowShopPanel(false);
+                setActiveShop(null);
+                if (engineRef.current) engineRef.current.shopPanelOpen = false;
+              }}
             />
           )}
         </>

@@ -40,6 +40,7 @@ type Player struct {
 	Level     int
 	XP        int
 	XPNeeded  int
+	Gold      int     // arena mode currency
 
 	BaseAttrs Attributes            // base (level-up only)
 	Attrs     Attributes            // computed = base + equipment
@@ -82,6 +83,7 @@ func NewWarrior(id, name string, pos Vec2) *Player {
 		Anim:     "idle",
 		Level:    1,
 		XP:       0, XPNeeded: 100,
+		Gold:     100, // Starting gold for arena mode
 		Skills:    WarriorSkills(),
 		Equipped:  make(map[string]*Equipment),
 		Inventory: make([]*Equipment, 0),
@@ -102,7 +104,7 @@ func NewWarrior(id, name string, pos Vec2) *Player {
 	return p
 }
 
-func (p *Player) Update(dt float64) {
+func (p *Player) Update(dt float64, arenaMode bool) {
 	// Update skill cooldowns
 	for _, sk := range p.Skills {
 		if sk.CdRemain > 0 {
@@ -144,6 +146,41 @@ func (p *Player) Update(dt float64) {
 		}
 	}
 
+	// Arena mode: player stays at center, faces target
+	if arenaMode {
+		// Face toward auto-target (set by world)
+		dx := p.MouseX - p.Position.X
+		dy := p.MouseY - p.Position.Y
+		if dx != 0 || dy != 0 {
+			p.Angle = math.Atan2(dy, dx)
+		}
+		if dx > 0 {
+			p.Facing = "right"
+		} else if dx < 0 {
+			p.Facing = "left"
+		}
+
+		// Cast lock animation
+		if p.CastLock > 0 {
+			p.CastLock -= dt
+			if p.CastLock < 0 {
+				p.CastLock = 0
+			}
+			p.Anim = "cast"
+		} else {
+			p.Anim = "idle"
+		}
+
+		// Animation frame
+		p.AnimTimer += dt
+		if p.AnimTimer > 0.12 {
+			p.AnimTimer = 0
+			p.AnimFrame = (p.AnimFrame + 1) % 6
+		}
+		return
+	}
+
+	// Classic mode: normal movement
 	// Face toward mouse (360 degrees)
 	dx := p.MouseX - p.Position.X
 	dy := p.MouseY - p.Position.Y
@@ -226,9 +263,7 @@ func (p *Player) Update(dt float64) {
 		p.AnimFrame = (p.AnimFrame + 1) % 6
 	}
 
-	// Clamp to map bounds
-	p.Position.X = math.Max(0, math.Min(2000, p.Position.X))
-	p.Position.Y = math.Max(0, math.Min(1500, p.Position.Y))
+	// Note: map clamping is done in world.go resolveCollisions
 }
 
 func (p *Player) TryCast(slot string, targetX, targetY float64) *ActiveEffect {
@@ -433,6 +468,7 @@ func (p *Player) ToState() PlayerState {
 		Anim:      p.Anim,
 		AnimFrame: p.AnimFrame,
 		Level:     p.Level,
+		Gold:      p.Gold,
 		Skills:    skills,
 		Attrs:     p.Attrs,
 		Equipped:  equipped,

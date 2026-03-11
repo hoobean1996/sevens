@@ -2,7 +2,7 @@ import { Network } from './Network';
 import { Renderer } from './Renderer';
 import { TownPixiRenderer, TownPixiScene } from './TownPixiRenderer';
 import { sfx } from './SoundSystem';
-import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem, BuildingPosition } from './types';
+import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem, BuildingPosition, ShopState } from './types';
 import { TOWN_GRID_W, TOWN_GRID_H, BUILDING_GRID_SIZE, gridToScreen, screenToGrid, pointInDiamond } from './townConfig';
 
 // Renderer is @ts-nocheck, declare shape for type safety here
@@ -67,12 +67,14 @@ export type GameMode = 'town' | 'start' | 'run';
 
 export interface GameCallbacks {
   onModeChange: (mode: GameMode) => void;
-  onHUDUpdate: (player: PlayerState, wave: number) => void;
+  onHUDUpdate: (player: PlayerState, wave: number, arenaMode?: boolean, shopPhase?: boolean, shopTimer?: number) => void;
   onWaveAnnounce: (wave: number) => void;
   onPickup: (name: string, rarity: number, slot: string) => void;
   onInventoryUpdate: (player: PlayerState) => void;
   onTownUpdate: (town: TownState, caps: { wood: number; stone: number; ore: number }) => void;
   onTownSelectionChange?: (buildingKey: string | null) => void;
+  onShopOpen?: (shop: ShopState) => void;
+  onShopResult?: (success: boolean, message: string) => void;
 }
 
 export class GameEngine {
@@ -136,10 +138,18 @@ export class GameEngine {
   // Cached player data
   cachedPlayerData: PlayerState | null = null;
 
+  // Arena mode state
+  arenaMode = false;
+  shopPhase = false;
+  shopTimer = 0;
+  shops: ShopState[] = [];
+  nearestShop: ShopState | null = null;
+
   // UI state
   inventoryOpen = false;
   statsPanelOpen = false;
   escMenuOpen = false;
+  shopPanelOpen = false;
 
   callbacks: GameCallbacks;
 
@@ -184,6 +194,12 @@ export class GameEngine {
       this.currSnapshot = msg as GameState;
       this.snapshotTime = performance.now();
 
+      // Arena mode state
+      this.arenaMode = msg.arena_mode || false;
+      this.shopPhase = msg.shop_phase || false;
+      this.shopTimer = msg.shop_timer || 0;
+      this.shops = msg.shops || [];
+
       // Mouse world coords are only meaningful in run mode (Canvas2D)
       if (this.mode !== 'town' && this.mainCanvas) {
         this.mouseWorldX = this.mouseX - this.mainCanvas.width / 2 + (this.renderer?.camera?.x || 0);
@@ -194,13 +210,28 @@ export class GameEngine {
       if (localPlayer) {
         this.cachedPlayerData = localPlayer;
 
+        // Compute nearest shop
+        this.nearestShop = null;
+        if (this.arenaMode && this.shopPhase && this.shops.length > 0) {
+          let minDist = 80;
+          for (const shop of this.shops) {
+            const dx = localPlayer.x - shop.x;
+            const dy = localPlayer.y - shop.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist < minDist) {
+              minDist = dist;
+              this.nearestShop = shop;
+            }
+          }
+        }
+
         // Sound feedback
         if (this.lastHP !== null && localPlayer.hp < this.lastHP) sfx.playerHurt();
         if (this.lastLevel !== null && localPlayer.level > this.lastLevel) sfx.levelUp();
         this.lastHP = localPlayer.hp;
         this.lastLevel = localPlayer.level;
 
-        this.callbacks.onHUDUpdate(localPlayer, this.lastWave);
+        this.callbacks.onHUDUpdate(localPlayer, this.lastWave, this.arenaMode, this.shopPhase, this.shopTimer);
         if (this.inventoryOpen) {
           this.callbacks.onInventoryUpdate(localPlayer);
         }
@@ -212,6 +243,10 @@ export class GameEngine {
         if (msg.wave % 5 === 0) sfx.bossWave();
         else sfx.waveStart();
       }
+    };
+
+    this.network.onShopResult = (msg) => {
+      this.callbacks.onShopResult?.(msg.success, msg.message);
     };
 
     this.network.onPickup = (msg) => {
@@ -563,8 +598,8 @@ export class GameEngine {
   }
 
   startAdventure() {
-    this.mode = 'start';
-    this.callbacks.onModeChange('start');
+    // Skip character selection, go directly to game with warrior
+    this.selectHero('warrior');
   }
 
   backToTown() {
@@ -585,17 +620,42 @@ export class GameEngine {
       return;
     }
     if (key === 'escape') {
+      if (this.shopPanelOpen) { this.shopPanelOpen = false; e.preventDefault(); return; }
       if (this.statsPanelOpen) { this.statsPanelOpen = false; e.preventDefault(); return; }
       if (this.inventoryOpen) { this.inventoryOpen = false; e.preventDefault(); return; }
       if (this.gameStarted) { this.escMenuOpen = !this.escMenuOpen; e.preventDefault(); return; }
     }
     if (this.gameStarted && this.localPlayerID) {
-      if (['q', 'w', 'e', 'r'].includes(key)) {
+      // Arena mode: 1-4 opens shops anytime, no manual skills
+      if (this.arenaMode) {
+        // 1-4 keys open shops anytime
+        if (['1', '2', '3', '4'].includes(key) && !this.shopPanelOpen) {
+          const shopTypes = ['weapon', 'armor', 'potion', 'upgrade'];
+          const idx = parseInt(key) - 1;
+          const shop = this.shops.find(s => s.type === shopTypes[idx]);
+          if (shop) {
+            this.shopPanelOpen = true;
+            this.callbacks.onShopOpen?.(shop);
+          }
+          e.preventDefault();
+          return;
+        }
+        // No manual skill casting in arena mode - backend handles auto-combat
+        return;
+      }
+
+      // Classic mode: manual skill casting
+      if (key === 'e') {
+        this.network.sendCast(key, this.mouseWorldX, this.mouseWorldY);
+        sfx.resume();
+        sfx.warCry();
+        return;
+      }
+      if (['q', 'w', 'r'].includes(key)) {
         this.network.sendCast(key, this.mouseWorldX, this.mouseWorldY);
         sfx.resume();
         if (key === 'q') sfx.slash();
         else if (key === 'w') sfx.shieldBash();
-        else if (key === 'e') sfx.warCry();
         else if (key === 'r') sfx.ultimate();
       }
     }
@@ -729,6 +789,11 @@ export class GameEngine {
       effects: this.currSnapshot.effects,
       drops: this.currSnapshot.drops,
       damage_nums: t < 0.1 ? this.currSnapshot.damage_nums : [],
+      // Arena mode fields
+      arena_mode: this.arenaMode,
+      shop_phase: this.shopPhase,
+      shop_timer: this.shopTimer,
+      shops: this.shops,
     };
 
     state.players = (this.currSnapshot.players || []).map((cp: PlayerState) => {
@@ -791,13 +856,16 @@ export class GameEngine {
           this.network.send({ type: 'mouse', target_x: this.mouseWorldX, target_y: this.mouseWorldY });
         }
 
-        this.autoAttackAccum += dt;
-        while (this.autoAttackAccum >= 2.0) {
-          this.autoAttackAccum -= 2.0;
-          if (this.localPlayerID) {
-            this.network.sendCast('auto', this.mouseWorldX, this.mouseWorldY);
-            sfx.resume();
-            sfx.slash();
+        // Auto-attack only in classic mode (arena mode handles it server-side)
+        if (!this.arenaMode) {
+          this.autoAttackAccum += dt;
+          while (this.autoAttackAccum >= 2.0) {
+            this.autoAttackAccum -= 2.0;
+            if (this.localPlayerID) {
+              this.network.sendCast('auto', this.mouseWorldX, this.mouseWorldY);
+              sfx.resume();
+              sfx.slash();
+            }
           }
         }
       }

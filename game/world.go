@@ -15,6 +15,11 @@ const (
 	TickRate  = 20
 	MapWidth  = 2000
 	MapHeight = 1500
+
+	// Arena mode constants
+	ArenaWidth  = 800
+	ArenaHeight = 600
+	ShopPhaseDuration = 8.0
 )
 
 // PlayerConn wraps a websocket connection with a write channel
@@ -78,6 +83,12 @@ type World struct {
 	Wave       int
 	WaveTimer  float64
 	WaveActive bool
+
+	// Arena mode
+	ArenaMode      bool
+	ShopPhase      bool
+	ShopPhaseTimer float64
+	Shops          []*ShopStation
 }
 
 func (w *World) reset() {
@@ -88,6 +99,10 @@ func (w *World) reset() {
 	w.Wave = 0
 	w.WaveTimer = 3.0
 	w.TickNum = 0
+	w.ArenaMode = true
+	w.ShopPhase = false
+	w.ShopPhaseTimer = 0
+	w.Shops = initShops()
 	log.Println("World reset — all players left")
 }
 
@@ -97,6 +112,8 @@ func NewWorld() *World {
 		Conns:     make(map[string]*PlayerConn),
 		ConnToID:  make(map[*websocket.Conn]string),
 		WaveTimer: 3.0,
+		ArenaMode: true,
+		Shops:     initShops(),
 	}
 }
 
@@ -163,8 +180,15 @@ func (w *World) handleMessage(conn *websocket.Conn, msg ClientMessage) {
 	switch msg.Type {
 	case "join":
 		id := nextID("p")
-		spawnX := MapWidth/2 + (rand.Float64()-0.5)*200
-		spawnY := MapHeight/2 + (rand.Float64()-0.5)*200
+		var spawnX, spawnY float64
+		if w.ArenaMode {
+			// Spawn at center of arena
+			spawnX = ArenaWidth/2 + (rand.Float64()-0.5)*50
+			spawnY = ArenaHeight/2 + (rand.Float64()-0.5)*50
+		} else {
+			spawnX = MapWidth/2 + (rand.Float64()-0.5)*200
+			spawnY = MapHeight/2 + (rand.Float64()-0.5)*200
+		}
 
 		player := NewWarrior(id, msg.Name, Vec2{spawnX, spawnY})
 
@@ -174,11 +198,18 @@ func (w *World) handleMessage(conn *websocket.Conn, msg ClientMessage) {
 		w.ConnToID[conn] = id
 		log.Printf("Player %s (%s) joined as %s", id, msg.Name, msg.Hero)
 
+		var mapW, mapH float64
+		if w.ArenaMode {
+			mapW, mapH = ArenaWidth, ArenaHeight
+		} else {
+			mapW, mapH = MapWidth, MapHeight
+		}
 		ack := ServerMessage{
 			Type:      "joined",
 			PlayerID:  id,
-			MapWidth:  MapWidth,
-			MapHeight: MapHeight,
+			MapWidth:  mapW,
+			MapHeight: mapH,
+			ArenaMode: w.ArenaMode,
 		}
 		data, _ := json.Marshal(ack)
 		pc.Send(data)
@@ -262,6 +293,23 @@ func (w *World) handleMessage(conn *websocket.Conn, msg ClientMessage) {
 				p.UnequipItem(msg.Slot)
 			}
 		}
+
+	case "shop_buy":
+		if id, ok := w.ConnToID[conn]; ok {
+			if p, ok := w.Players[id]; ok {
+				// Allow shopping anytime in arena mode
+				result := w.ProcessShopBuy(p, msg.ShopID, msg.ItemID)
+				notify := map[string]interface{}{
+					"type":    "shop_result",
+					"success": result.Success,
+					"message": result.Message,
+				}
+				data, _ := json.Marshal(notify)
+				if pc, ok := w.Conns[id]; ok {
+					pc.Send(data)
+				}
+			}
+		}
 	}
 }
 
@@ -269,7 +317,61 @@ const PlayerRadius = 18.0
 
 func (w *World) updatePlayers(dt float64) {
 	for _, p := range w.Players {
-		p.Update(dt)
+		// In arena mode, auto-target nearest enemy
+		if w.ArenaMode && len(w.Enemies) > 0 {
+			var nearest *Enemy
+			minDist := math.MaxFloat64
+			for _, e := range w.Enemies {
+				if e.Dead {
+					continue
+				}
+				d := p.Position.DistTo(e.Position)
+				if d < minDist {
+					minDist = d
+					nearest = e
+				}
+			}
+			if nearest != nil {
+				p.MouseX = nearest.Position.X
+				p.MouseY = nearest.Position.Y
+			}
+		}
+
+		p.Update(dt, w.ArenaMode)
+
+		// Auto-combat in arena mode
+		if w.ArenaMode && !w.ShopPhase && len(w.Enemies) > 0 {
+			w.autoCast(p)
+		}
+	}
+}
+
+// autoCast automatically uses skills when off cooldown
+func (w *World) autoCast(p *Player) {
+	if p.CastLock > 0 {
+		return
+	}
+
+	// Priority: R (ultimate) > Q (slash) > W (shield bash) > E (war cry)
+	// Use ultimate when available and there are multiple enemies
+	skillOrder := []string{"r", "q", "w", "e"}
+	if len(w.Enemies) < 3 {
+		// Don't waste ultimate on few enemies
+		skillOrder = []string{"q", "w", "e"}
+	}
+
+	for _, slot := range skillOrder {
+		sk, ok := p.Skills[slot]
+		if !ok || sk.CdRemain > 0 || p.MP < sk.Def.MPCost {
+			continue
+		}
+
+		// Cast the skill at nearest enemy position
+		effect := p.TryCast(slot, p.MouseX, p.MouseY)
+		if effect != nil {
+			w.Effects = append(w.Effects, effect)
+			break // Only cast one skill per tick
+		}
 	}
 }
 
@@ -304,7 +406,12 @@ func (w *World) resolveCollisions() {
 			if e.Dead {
 				continue
 			}
-			resolveCircleCollision(&p.Position, PlayerRadius, &e.Position, e.Kind.Radius)
+			if w.ArenaMode {
+				// In arena mode, only push enemy away, player stays fixed
+				resolveStaticCircleCollision(&e.Position, e.Kind.Radius, p.Position, PlayerRadius)
+			} else {
+				resolveCircleCollision(&p.Position, PlayerRadius, &e.Position, e.Kind.Radius)
+			}
 		}
 	}
 
@@ -330,32 +437,40 @@ func (w *World) resolveCollisions() {
 		}
 	}
 
-	// Player vs Obstacles (obstacles are immovable)
-	for _, p := range players {
-		for _, obs := range MapObstacles {
-			resolveStaticCircleCollision(&p.Position, PlayerRadius, obs.Position, obs.Radius)
+	// Player vs Obstacles (obstacles are immovable) - skip in arena mode
+	if !w.ArenaMode {
+		for _, p := range players {
+			for _, obs := range MapObstacles {
+				resolveStaticCircleCollision(&p.Position, PlayerRadius, obs.Position, obs.Radius)
+			}
 		}
-	}
 
-	// Enemy vs Obstacles
-	for _, e := range w.Enemies {
-		if e.Dead {
-			continue
-		}
-		for _, obs := range MapObstacles {
-			resolveStaticCircleCollision(&e.Position, e.Kind.Radius, obs.Position, obs.Radius)
+		// Enemy vs Obstacles
+		for _, e := range w.Enemies {
+			if e.Dead {
+				continue
+			}
+			for _, obs := range MapObstacles {
+				resolveStaticCircleCollision(&e.Position, e.Kind.Radius, obs.Position, obs.Radius)
+			}
 		}
 	}
 
 	// Clamp all to map bounds after collision
+	var mapW, mapH float64
+	if w.ArenaMode {
+		mapW, mapH = ArenaWidth, ArenaHeight
+	} else {
+		mapW, mapH = MapWidth, MapHeight
+	}
 	for _, p := range players {
-		p.Position.X = math.Max(PlayerRadius, math.Min(MapWidth-PlayerRadius, p.Position.X))
-		p.Position.Y = math.Max(PlayerRadius, math.Min(MapHeight-PlayerRadius, p.Position.Y))
+		p.Position.X = math.Max(PlayerRadius, math.Min(mapW-PlayerRadius, p.Position.X))
+		p.Position.Y = math.Max(PlayerRadius, math.Min(mapH-PlayerRadius, p.Position.Y))
 	}
 	for _, e := range w.Enemies {
 		if !e.Dead {
-			e.Position.X = math.Max(e.Kind.Radius, math.Min(MapWidth-e.Kind.Radius, e.Position.X))
-			e.Position.Y = math.Max(e.Kind.Radius, math.Min(MapHeight-e.Kind.Radius, e.Position.Y))
+			e.Position.X = math.Max(e.Kind.Radius, math.Min(mapW-e.Kind.Radius, e.Position.X))
+			e.Position.Y = math.Max(e.Kind.Radius, math.Min(mapH-e.Kind.Radius, e.Position.Y))
 		}
 	}
 }
@@ -453,6 +568,10 @@ func (w *World) updateEffects(dt float64) {
 					if killed {
 						if p, ok := w.Players[ef.OwnerID]; ok {
 							p.AddXP(e.Kind.XP)
+							// Award gold in arena mode
+							if w.ArenaMode {
+								p.Gold += e.Kind.GoldDrop
+							}
 						}
 						// Roll for equipment drop
 						if drop := RollDrop(e.Kind.Name, w.Wave); drop != nil {
@@ -475,7 +594,28 @@ func (w *World) updateEffects(dt float64) {
 }
 
 func (w *World) updateDrops(dt float64) {
-	// Age drops, remove after 30 seconds
+	// In arena mode, auto-pickup for nearest player
+	if w.ArenaMode {
+		for _, d := range w.Drops {
+			// Find nearest player
+			var nearest *Player
+			bestDist := 9999.0
+			for _, p := range w.Players {
+				dist := p.Position.DistTo(d.Position)
+				if dist < bestDist {
+					bestDist = dist
+					nearest = p
+				}
+			}
+			if nearest != nil {
+				nearest.PickupEquipment(&d.Equip)
+			}
+		}
+		w.Drops = nil // All drops auto-picked
+		return
+	}
+
+	// Classic mode: Age drops, remove after 30 seconds
 	alive := make([]*GroundDrop, 0, len(w.Drops))
 	for _, d := range w.Drops {
 		d.Age += dt
@@ -491,13 +631,40 @@ func (w *World) updateWaves(dt float64) {
 		return
 	}
 
-	w.WaveTimer -= dt
-	if w.WaveTimer <= 0 && len(w.Enemies) < 3 {
-		w.Wave++
-		w.spawnWave()
-		w.WaveTimer = 12 + float64(w.Wave)*0.5
-		if w.WaveTimer > 25 {
-			w.WaveTimer = 25
+	if w.ArenaMode {
+		// Arena mode: continuous waves, no shop phase pause
+		// Spawn next wave immediately when all enemies are killed
+		if len(w.Enemies) == 0 {
+			if w.Wave == 0 {
+				// First wave starts after initial timer
+				w.WaveTimer -= dt
+				if w.WaveTimer <= 0 {
+					w.Wave++
+					w.spawnWave()
+					for _, shop := range w.Shops {
+						shop.RefreshItems(w.Wave)
+					}
+				}
+			} else {
+				// Next wave starts immediately
+				w.Wave++
+				w.spawnWave()
+				// Refresh shop items every wave
+				for _, shop := range w.Shops {
+					shop.RefreshItems(w.Wave)
+				}
+			}
+		}
+	} else {
+		// Classic mode
+		w.WaveTimer -= dt
+		if w.WaveTimer <= 0 && len(w.Enemies) < 3 {
+			w.Wave++
+			w.spawnWave()
+			w.WaveTimer = 12 + float64(w.Wave)*0.5
+			if w.WaveTimer > 25 {
+				w.WaveTimer = 25
+			}
 		}
 	}
 }
@@ -505,57 +672,111 @@ func (w *World) updateWaves(dt float64) {
 func (w *World) spawnWave() {
 	log.Printf("Spawning wave %d", w.Wave)
 
-	var center Vec2
-	count := 0
-	for _, p := range w.Players {
-		center = center.Add(p.Position)
-		count++
-	}
-	if count > 0 {
-		center = center.Scale(1.0 / float64(count))
-	} else {
-		center = Vec2{MapWidth / 2, MapHeight / 2}
-	}
-
 	isBoss := w.Wave%5 == 0
 	waveMult := 1.0 + float64(w.Wave)*0.1
 
-	if isBoss {
-		ang := rand.Float64() * math.Pi * 2
-		pos := Vec2{
-			center.X + math.Cos(ang)*500,
-			center.Y + math.Sin(ang)*500,
-		}
-		w.Enemies = append(w.Enemies, NewEnemy("boss", pos, waveMult))
-		for i := 0; i < 3+w.Wave/2; i++ {
-			a := rand.Float64() * math.Pi * 2
-			d := 400 + rand.Float64()*200
-			epos := Vec2{center.X + math.Cos(a)*d, center.Y + math.Sin(a)*d}
-			w.Enemies = append(w.Enemies, NewEnemy("skeleton", epos, waveMult))
+	if w.ArenaMode {
+		// Arena mode: spawn from edges
+		if isBoss {
+			// Boss from random edge
+			pos := w.randomEdgePosition()
+			w.Enemies = append(w.Enemies, NewEnemy("boss", pos, waveMult))
+			// Minions
+			for i := 0; i < 3+w.Wave/2; i++ {
+				epos := w.randomEdgePosition()
+				w.Enemies = append(w.Enemies, NewEnemy("skeleton", epos, waveMult))
+			}
+		} else {
+			num := 4 + w.Wave*2
+			if num > 20 {
+				num = 20
+			}
+			for i := 0; i < num; i++ {
+				pos := w.randomEdgePosition()
+				kind := "skeleton"
+				r := rand.Float64()
+				if w.Wave >= 3 && r < 0.3 {
+					kind = "orc"
+				}
+				if w.Wave >= 6 && r < 0.15 {
+					kind = "demon"
+				}
+				w.Enemies = append(w.Enemies, NewEnemy(kind, pos, waveMult))
+			}
 		}
 	} else {
-		num := 4 + w.Wave*2
-		if num > 30 {
-			num = 30
+		// Classic mode: spawn around player center
+		var center Vec2
+		count := 0
+		for _, p := range w.Players {
+			center = center.Add(p.Position)
+			count++
 		}
-		for i := 0; i < num; i++ {
+		if count > 0 {
+			center = center.Scale(1.0 / float64(count))
+		} else {
+			center = Vec2{MapWidth / 2, MapHeight / 2}
+		}
+
+		if isBoss {
 			ang := rand.Float64() * math.Pi * 2
-			dist := 350 + rand.Float64()*250
 			pos := Vec2{
-				center.X + math.Cos(ang)*dist,
-				center.Y + math.Sin(ang)*dist,
+				center.X + math.Cos(ang)*500,
+				center.Y + math.Sin(ang)*500,
 			}
-			kind := "skeleton"
-			r := rand.Float64()
-			if w.Wave >= 3 && r < 0.3 {
-				kind = "orc"
+			w.Enemies = append(w.Enemies, NewEnemy("boss", pos, waveMult))
+			for i := 0; i < 3+w.Wave/2; i++ {
+				a := rand.Float64() * math.Pi * 2
+				d := 400 + rand.Float64()*200
+				epos := Vec2{center.X + math.Cos(a)*d, center.Y + math.Sin(a)*d}
+				w.Enemies = append(w.Enemies, NewEnemy("skeleton", epos, waveMult))
 			}
-			if w.Wave >= 6 && r < 0.15 {
-				kind = "demon"
+		} else {
+			num := 4 + w.Wave*2
+			if num > 30 {
+				num = 30
 			}
-			w.Enemies = append(w.Enemies, NewEnemy(kind, pos, waveMult))
+			for i := 0; i < num; i++ {
+				ang := rand.Float64() * math.Pi * 2
+				dist := 350 + rand.Float64()*250
+				pos := Vec2{
+					center.X + math.Cos(ang)*dist,
+					center.Y + math.Sin(ang)*dist,
+				}
+				kind := "skeleton"
+				r := rand.Float64()
+				if w.Wave >= 3 && r < 0.3 {
+					kind = "orc"
+				}
+				if w.Wave >= 6 && r < 0.15 {
+					kind = "demon"
+				}
+				w.Enemies = append(w.Enemies, NewEnemy(kind, pos, waveMult))
+			}
 		}
 	}
+}
+
+// randomEdgePosition returns a position on the arena edge
+func (w *World) randomEdgePosition() Vec2 {
+	edge := rand.Intn(4)
+	var x, y float64
+	margin := 30.0
+	switch edge {
+	case 0: // top
+		x = rand.Float64() * ArenaWidth
+		y = margin
+	case 1: // bottom
+		x = rand.Float64() * ArenaWidth
+		y = ArenaHeight - margin
+	case 2: // left
+		x = margin
+		y = rand.Float64() * ArenaHeight
+	case 3: // right
+		x = ArenaWidth - margin
+		y = rand.Float64() * ArenaHeight
+	}
+	return Vec2{x, y}
 }
 
 func (w *World) buildSnapshot() []byte {
@@ -567,6 +788,17 @@ func (w *World) buildSnapshot() []byte {
 		Enemies: make([]EnemyState, 0, len(w.Enemies)),
 		Effects: make([]EffectState, 0, len(w.Effects)),
 		Drops:   make([]GroundDrop, 0, len(w.Drops)),
+	}
+
+	// Arena mode fields
+	if w.ArenaMode {
+		msg.ArenaMode = true
+		msg.ShopPhase = w.ShopPhase
+		msg.ShopPhaseTimer = w.ShopPhaseTimer
+		msg.Shops = make([]ShopState, 0, len(w.Shops))
+		for _, shop := range w.Shops {
+			msg.Shops = append(msg.Shops, shop.ToState())
+		}
 	}
 
 	for _, p := range w.Players {

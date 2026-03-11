@@ -27,3 +27,25 @@
   align-items: center;
 }
 .hud-info span { color: #ffd700; }
+
+.hud-gold {
+  background: rgba(0,0,0,0.5);
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,215,0,0.3);
+}
+
+/* Shop hotkeys hint */
+.hud-shop-hint {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  background: rgba(0,0,0,0.6);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #ffd700;
+  border: 1px solid rgba(255,215,0,0.3);
+}

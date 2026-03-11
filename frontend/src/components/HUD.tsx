@@ -6,9 +6,12 @@ interface Props {
   player: PlayerState | null;
   wave: number;
   townBonus: TownBonus;
+  arenaMode?: boolean;
+  shopPhase?: boolean;
+  shopTimer?: number;
 }
 
-const HUD: React.FC<Props> = ({ player, wave, townBonus }) => {
+const HUD: React.FC<Props> = ({ player, wave, townBonus, arenaMode, shopPhase, shopTimer }) => {
   if (!player) return null;
 
   const displayMaxHP = Math.round(player.max_hp * townBonus.hpMult);
@@ -36,8 +39,18 @@ const HUD: React.FC<Props> = ({ player, wave, townBonus }) => {
         <div className="hud-info">
           <div>LV <span>{player.level}</span></div>
           <div>WAVE <span>{wave}</span></div>
+          {arenaMode && (
+            <div className="hud-gold">💰 <span>{player.gold || 0}</span></div>
+          )}
         </div>
       </div>
+
+      {/* Shop hotkeys hint - always visible in arena mode */}
+      {arenaMode && (
+        <div className="hud-shop-hint">
+          [1] 武器 [2] 防具 [3] 药水 [4] 强化
+        </div>
+      )}
     </div>
   );
 };
