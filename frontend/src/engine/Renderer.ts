@@ -1,6 +1,7 @@
 // @ts-nocheck
 /* eslint-disable */
 import { ParticleSystem, VFX } from "./Effects";
+import { TOWN_GRID_W, TOWN_GRID_H, ISO_TILE_W, ISO_TILE_H, BUILDING_GRID_SIZE, BUILDING_NAMES, gridToScreen } from "./townConfig";
 
 // ==================== RENDERER ====================
 class Renderer {
@@ -66,19 +67,120 @@ class Renderer {
         this.groundTile = tc;
     }
 
-    resize() {
-        const w = window.innerWidth;
-        const h = window.innerHeight;
-        if (this.canvas.width !== w || this.canvas.height !== h) {
-            this.canvas.width = w;
-            this.canvas.height = h;
+    resize(w, h) {
+        const width = w != null ? w : window.innerWidth;
+        const height = h != null ? h : window.innerHeight;
+        if (this.canvas.width !== width || this.canvas.height !== height) {
+            this.canvas.width = width;
+            this.canvas.height = height;
         }
     }
 
-    render(gameState, localPlayerID, mouseWorldX, mouseWorldY, dt, moveTarget) {
+    _drawDiamond(ctx, cx, cy, scale) {
+        const w = (ISO_TILE_W / 2) * (scale || 1);
+        const h = (ISO_TILE_H / 2) * (scale || 1);
+        ctx.beginPath();
+        ctx.moveTo(cx - w, cy);
+        ctx.lineTo(cx, cy - h);
+        ctx.lineTo(cx + w, cy);
+        ctx.lineTo(cx, cy + h);
+        ctx.closePath();
+    }
+
+    _renderTown(ctx, W, H, townScene) {
+        const { townState, buildingGridSize, townHoverCell, townDragBuilding, townSelectedBuilding } = townScene;
+        const positions = townState.buildingPositions || {};
+        const centerGx = (TOWN_GRID_W - 1) / 2;
+        const centerGy = (TOWN_GRID_H - 1) / 2;
+        const isoCenter = gridToScreen(centerGx, centerGy);
+        ctx.fillStyle = '#0d0d14';
+        ctx.fillRect(0, 0, W, H);
+        ctx.save();
+        ctx.translate(W / 2 - isoCenter.x, H / 2 - isoCenter.y);
+
+        for (let gy = 0; gy < TOWN_GRID_H; gy++) {
+            for (let gx = 0; gx < TOWN_GRID_W; gx++) {
+                const p = gridToScreen(gx, gy);
+                ctx.fillStyle = (gx + gy) % 2 === 0 ? '#14161e' : '#1a1c26';
+                this._drawDiamond(ctx, p.x, p.y, 1);
+                ctx.fill();
+                ctx.strokeStyle = '#1c1f2a';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+        }
+
+        const buildingColors = {
+            hall: '#8b7355',
+            warehouse: '#6b7b8b',
+            lumber: '#4a6b4a',
+            quarry: '#7a7a7a',
+            mine: '#5a5a6a',
+            blacksmith: '#6a4a4a',
+            tavern: '#8b6a4a',
+            alchemy: '#4a6a7a',
+        };
+
+        const items = [];
+        if (townHoverCell) {
+            items.push({ gx: townHoverCell.x, gy: townHoverCell.y, kind: 'hover' });
+        }
+        if (townDragBuilding && townHoverCell) {
+            items.push({ gx: townHoverCell.x, gy: townHoverCell.y, kind: 'preview', type: townDragBuilding });
+        }
+        for (const [type, pos] of Object.entries(positions)) {
+            items.push({ gx: pos.x, gy: pos.y, kind: 'building', type, pos });
+        }
+        items.sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy));
+
+        for (const it of items) {
+            const p = gridToScreen(it.gx, it.gy);
+            if (it.kind === 'hover') {
+                ctx.fillStyle = 'rgba(255, 215, 0, 0.2)';
+                this._drawDiamond(ctx, p.x, p.y, 1);
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 215, 0, 0.7)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            } else if (it.kind === 'preview') {
+                ctx.globalAlpha = 0.6;
+                ctx.fillStyle = buildingColors[it.type] || '#444';
+                this._drawDiamond(ctx, p.x, p.y, 1.15);
+                ctx.fill();
+                ctx.strokeStyle = '#ffd700';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            } else {
+                const size = buildingGridSize[it.type] || { w: 1, h: 1 };
+                const isSelected = it.type === townSelectedBuilding;
+                ctx.fillStyle = buildingColors[it.type] || '#444';
+                this._drawDiamond(ctx, p.x, p.y, 1.15);
+                ctx.fill();
+                ctx.strokeStyle = isSelected ? '#ffaa00' : '#ffd700';
+                ctx.lineWidth = isSelected ? 3 : 2;
+                ctx.stroke();
+                ctx.fillStyle = '#fff';
+                ctx.font = '11px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const level = townState.buildings[it.type] ?? 0;
+                const label = (BUILDING_NAMES[it.type] || it.type) + ' Lv.' + level;
+                ctx.fillText(label, p.x, p.y);
+            }
+        }
+        ctx.restore();
+    }
+
+    render(gameState, localPlayerID, mouseWorldX, mouseWorldY, dt, moveTarget, townScene) {
         const ctx = this.ctx;
         const W = this.canvas.width;
         const H = this.canvas.height;
+
+        if (townScene) {
+            this._renderTown(ctx, W, H, townScene);
+            return;
+        }
 
         if (!gameState) return;
 

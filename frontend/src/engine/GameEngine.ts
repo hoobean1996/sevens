@@ -1,13 +1,15 @@
 import { Network } from './Network';
 import { Renderer } from './Renderer';
+import { TownPixiRenderer, TownPixiScene } from './TownPixiRenderer';
 import { sfx } from './SoundSystem';
-import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem } from './types';
+import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem, BuildingPosition } from './types';
+import { TOWN_GRID_W, TOWN_GRID_H, BUILDING_GRID_SIZE, gridToScreen, screenToGrid, pointInDiamond } from './townConfig';
 
 // Renderer is @ts-nocheck, declare shape for type safety here
 interface RendererLike {
   camera: { x: number; y: number };
   resize: () => void;
-  render: (state: any, localPlayerID: string | null, mouseWorldX: number, mouseWorldY: number, dt: number, moveTarget: any) => void;
+  render: (state: any, localPlayerID: string | null, mouseWorldX: number, mouseWorldY: number, dt: number, moveTarget: any, townScene?: any) => void;
 }
 
 const SERVER_TICK_MS = 50;
@@ -70,11 +72,20 @@ export interface GameCallbacks {
   onPickup: (name: string, rarity: number, slot: string) => void;
   onInventoryUpdate: (player: PlayerState) => void;
   onTownUpdate: (town: TownState, caps: { wood: number; stone: number; ore: number }) => void;
+  onTownSelectionChange?: (buildingKey: string | null) => void;
 }
 
 export class GameEngine {
   network: Network;
+  // Main (adventure) renderer/canvas (Canvas2D)
   renderer: RendererLike | null = null;
+  mainCanvas: HTMLCanvasElement | null = null;
+
+  // Town renderer/canvas (PixiJS)
+  townRenderer: TownPixiRenderer | null = null;
+  townCanvas: HTMLCanvasElement | null = null;
+
+  // Active canvas for input mapping
   canvas: HTMLCanvasElement | null = null;
 
   mode: GameMode = 'town';
@@ -110,6 +121,17 @@ export class GameEngine {
   townState: TownState | null = null;
   townBonus: TownBonus = { atkMult: 1, hpMult: 1, defMult: 1 };
   private townResAccum = 0;
+  townHoverCell: { x: number; y: number } | null = null;
+  townDragBuilding: string | null = null;
+  townSelectedBuilding: string | null = null;
+  private townDragStartCell: { x: number; y: number } | null = null;
+  // Town camera & zoom
+  private townCameraX = 0;
+  private townCameraY = 0;
+  private townZoom = 3;
+  private townDragCamera = false;
+  private townLastDragX = 0;
+  private townLastDragY = 0;
 
   // Cached player data
   cachedPlayerData: PlayerState | null = null;
@@ -128,9 +150,23 @@ export class GameEngine {
   }
 
   initCanvas(canvas: HTMLCanvasElement) {
-    this.canvas = canvas;
+    this.mainCanvas = canvas;
+    if (this.mode !== 'town') this.canvas = canvas;
     this.renderer = new Renderer(canvas) as unknown as RendererLike;
     this.renderer.resize();
+  }
+
+  /** 城镇画布使用 PixiJS v8，需 await 完成后再 resize/render */
+  async initTownCanvas(canvas: HTMLCanvasElement): Promise<void> {
+    if (this.townCanvas !== canvas) {
+      this.townRenderer?.destroy();
+      this.townCanvas = canvas;
+      this.townRenderer = new TownPixiRenderer(canvas);
+      await this.townRenderer.init();
+      this.townRenderer.setZoom(this.townZoom);
+      this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
+    }
+    if (this.mode === 'town') this.canvas = canvas;
   }
 
   private setupNetworkHandlers() {
@@ -148,9 +184,10 @@ export class GameEngine {
       this.currSnapshot = msg as GameState;
       this.snapshotTime = performance.now();
 
-      if (this.canvas) {
-        this.mouseWorldX = this.mouseX - this.canvas.width / 2 + (this.renderer?.camera?.x || 0);
-        this.mouseWorldY = this.mouseY - this.canvas.height / 2 + (this.renderer?.camera?.y || 0);
+      // Mouse world coords are only meaningful in run mode (Canvas2D)
+      if (this.mode !== 'town' && this.mainCanvas) {
+        this.mouseWorldX = this.mouseX - this.mainCanvas.width / 2 + (this.renderer?.camera?.x || 0);
+        this.mouseWorldY = this.mouseY - this.mainCanvas.height / 2 + (this.renderer?.camera?.y || 0);
       }
 
       const localPlayer = msg.players?.find((p: PlayerState) => p.id === this.localPlayerID);
@@ -209,7 +246,154 @@ export class GameEngine {
       this.townState.buildQueue.push(null);
     }
     this.townState.buildQueue = this.townState.buildQueue.slice(0, BUILD_QUEUE_MAX_SLOTS);
+
+    const buildingOrder = ['hall', 'warehouse', 'lumber', 'quarry', 'mine', 'blacksmith', 'tavern', 'alchemy'];
+    const existingTypes = buildingOrder.filter((k) => this.townState!.buildings[k] !== undefined);
+
+    if (!this.townState.buildingPositions || Object.keys(this.townState.buildingPositions).length === 0) {
+      this.townState.buildingPositions = this.generateDefaultBuildingPositions(existingTypes);
+    } else {
+      for (const type of existingTypes) {
+        if (!this.townState.buildingPositions[type]) {
+          const pos = this.findFirstFreeCellForBuilding(type);
+          if (pos) {
+            this.townState.buildingPositions[type] = pos;
+          }
+        }
+      }
+    }
+
     this.persistTownState();
+  }
+
+  private generateDefaultBuildingPositions(types: string[]): Record<string, BuildingPosition> {
+    const out: Record<string, BuildingPosition> = {};
+    const used = new Set<string>();
+    const key = (gx: number, gy: number) => `${gx},${gy}`;
+    const canPlace = (gx: number, gy: number, w: number, h: number) => {
+      if (gx + w > TOWN_GRID_W || gy + h > TOWN_GRID_H) return false;
+      for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) {
+          if (used.has(key(gx + dx, gy + dy))) return false;
+        }
+      }
+      return true;
+    };
+    const mark = (gx: number, gy: number, w: number, h: number) => {
+      for (let dy = 0; dy < h; dy++) {
+        for (let dx = 0; dx < w; dx++) used.add(key(gx + dx, gy + dy));
+      }
+    };
+    for (const type of types) {
+      const size = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
+      let placed = false;
+      for (let gy = 0; gy < TOWN_GRID_H && !placed; gy++) {
+        for (let gx = 0; gx < TOWN_GRID_W && !placed; gx++) {
+          if (canPlace(gx, gy, size.w, size.h)) {
+            out[type] = { x: gx, y: gy };
+            mark(gx, gy, size.w, size.h);
+            placed = true;
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  /** 城镇模式下将当前鼠标屏幕坐标转换为网格格子（等轴测反算 + 菱形命中） */
+  getTownMouseGrid(): { x: number; y: number } | null {
+    if (this.mode !== 'town' || !this.canvas) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
+    const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
+    const canvasX = (this.mouseX - rect.left) * scaleX;
+    const canvasY = (this.mouseY - rect.top) * scaleY;
+    // Must match TownPixiRenderer centering + camera transform (inverse)
+    const isoCenter = gridToScreen((TOWN_GRID_W - 1) / 2, (TOWN_GRID_H - 1) / 2);
+    let dx = canvasX - this.canvas.width / 2;
+    let dy = canvasY - this.canvas.height / 2;
+    dx -= this.townCameraX;
+    dy -= this.townCameraY;
+    dx /= this.townZoom;
+    dy /= this.townZoom;
+    const isoScreenX = dx + isoCenter.x;
+    const isoScreenY = dy + isoCenter.y;
+    const { gx: gxf, gy: gyf } = screenToGrid(isoScreenX, isoScreenY);
+    const i0 = Math.floor(gxf);
+    const j0 = Math.floor(gyf);
+    const candidates: [number, number][] = [
+      [i0, j0],
+      [i0 + 1, j0],
+      [i0, j0 + 1],
+      [i0 + 1, j0 + 1],
+    ];
+    for (const [gx, gy] of candidates) {
+      if (gx < 0 || gx >= TOWN_GRID_W || gy < 0 || gy >= TOWN_GRID_H) continue;
+      if (pointInDiamond(isoScreenX, isoScreenY, gx, gy)) return { x: gx, y: gy };
+    }
+    const gx = Math.round(gxf);
+    const gy = Math.round(gyf);
+    if (gx < 0 || gx >= TOWN_GRID_W || gy < 0 || gy >= TOWN_GRID_H) return null;
+    return { x: gx, y: gy };
+  }
+
+  getBuildingAtGrid(gx: number, gy: number): string | null {
+    const positions = this.townState?.buildingPositions;
+    if (!positions) return null;
+    for (const [type, pos] of Object.entries(positions)) {
+      const size = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
+      if (gx >= pos.x && gx < pos.x + size.w && gy >= pos.y && gy < pos.y + size.h) return type;
+    }
+    return null;
+  }
+
+  moveBuilding(buildingType: string, toGx: number, toGy: number): boolean {
+    if (!this.townState?.buildingPositions) return false;
+    const size = BUILDING_GRID_SIZE[buildingType] ?? { w: 1, h: 1 };
+    if (toGx < 0 || toGy < 0 || toGx + size.w > TOWN_GRID_W || toGy + size.h > TOWN_GRID_H) return false;
+    const positions = this.townState.buildingPositions;
+    for (const [type, pos] of Object.entries(positions)) {
+      if (type === buildingType) continue;
+      const sz = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
+      const disjoint =
+        toGx + size.w <= pos.x || pos.x + sz.w <= toGx || toGy + size.h <= pos.y || pos.y + sz.h <= toGy;
+      if (!disjoint) return false;
+    }
+    this.townState.buildingPositions[buildingType] = { x: toGx, y: toGy };
+    this.persistTownState();
+    this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
+    return true;
+  }
+
+  clearTownSelection() {
+    this.townSelectedBuilding = null;
+    this.callbacks.onTownSelectionChange?.(null);
+  }
+
+  private findFirstFreeCellForBuilding(buildingType: string): BuildingPosition | null {
+    const size = BUILDING_GRID_SIZE[buildingType] ?? { w: 1, h: 1 };
+    const positions = this.townState?.buildingPositions ?? {};
+    const used = new Set<string>();
+    const key = (gx: number, gy: number) => `${gx},${gy}`;
+    for (const [t, pos] of Object.entries(positions)) {
+      const sz = BUILDING_GRID_SIZE[t] ?? { w: 1, h: 1 };
+      for (let dy = 0; dy < sz.h; dy++) {
+        for (let dx = 0; dx < sz.w; dx++) used.add(key(pos.x + dx, pos.y + dy));
+      }
+    }
+    for (let gy = 0; gy < TOWN_GRID_H; gy++) {
+      for (let gx = 0; gx < TOWN_GRID_W; gx++) {
+        if (gx + size.w > TOWN_GRID_W || gy + size.h > TOWN_GRID_H) continue;
+        let ok = true;
+        for (let dy = 0; dy < size.h && ok; dy++) {
+          for (let dx = 0; dx < size.w && ok; dx++) {
+            if (used.has(key(gx + dx, gy + dy))) ok = false;
+          }
+        }
+        if (ok) return { x: gx, y: gy };
+      }
+    }
+    return null;
   }
 
   persistTownState() {
@@ -224,6 +408,22 @@ export class GameEngine {
     const b = this.townState.buildings;
     const cap = Math.round(townCalcResCap(b.hall, b.warehouse));
     return { wood: cap, stone: cap, ore: cap };
+  }
+
+  /** 返回指定建筑下一级升级所需资源（与 upgradeBuilding 内计算一致） */
+  getUpgradeCost(buildingType: string): { wood: number; stone: number; ore: number; gold: number } {
+    const base = TOWN_UPGRADE_BASE_COST[buildingType];
+    if (!base) return { wood: 0, stone: 0, ore: 0, gold: 0 };
+    const current = this.townState?.buildings[buildingType] ?? 0;
+    if (current >= 10) return { wood: 0, stone: 0, ore: 0, gold: 0 };
+    const L = Math.max(0, Math.min(9, current));
+    const mult = (1 + L) * (1 + L);
+    return {
+      wood: Math.round(base.wood * mult),
+      stone: Math.round(base.stone * mult),
+      ore: Math.round(base.ore * mult),
+      gold: Math.round(base.gold * mult),
+    };
   }
 
   /** 根据市政厅等级返回已解锁的建造队列槽位数（1/2/3） */
@@ -408,21 +608,106 @@ export class GameEngine {
     this.keys[e.key.toLowerCase()] = false;
   }
 
+  handleWheel(e: WheelEvent) {
+    if (this.mode !== 'town') return;
+    if (!this.canvas || !this.townRenderer) return;
+    e.preventDefault();
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
+    const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
+    const canvasX = (e.clientX - rect.left) * scaleX;
+    const canvasY = (e.clientY - rect.top) * scaleY;
+
+    const before = this.getTownMouseGrid();
+
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    this.townZoom = Math.max(1.5, Math.min(3.5, this.townZoom * factor));
+    this.townRenderer.setZoom(this.townZoom);
+
+    if (before) {
+      // After zoom, adjust camera so the grid cell under the mouse stays approximately fixed
+      const after = this.getTownMouseGrid();
+      if (after) {
+        const dxGrid = before.x - after.x;
+        const dyGrid = before.y - after.y;
+        if (dxGrid !== 0 || dyGrid !== 0) {
+          const isoBefore = gridToScreen(before.x, before.y);
+          const isoAfter = gridToScreen(after.x, after.y);
+          const dx = (isoBefore.x - isoAfter.x) * this.townZoom;
+          const dy = (isoBefore.y - isoAfter.y) * this.townZoom;
+          this.townCameraX += dx;
+          this.townCameraY += dy;
+          this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
+        }
+      }
+    }
+  }
+
   handleMouseMove(e: MouseEvent) {
     this.mouseX = e.clientX;
     this.mouseY = e.clientY;
-    if (this.canvas && this.renderer) {
-      this.mouseWorldX = this.mouseX - this.canvas.width / 2 + this.renderer.camera.x;
-      this.mouseWorldY = this.mouseY - this.canvas.height / 2 + this.renderer.camera.y;
+    if (this.mode === 'town') {
+      if (this.townDragCamera && this.townRenderer) {
+        const dx = e.clientX - this.townLastDragX;
+        const dy = e.clientY - this.townLastDragY;
+        this.townLastDragX = e.clientX;
+        this.townLastDragY = e.clientY;
+        this.townCameraX += dx;
+        this.townCameraY += dy;
+        this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
+      } else {
+        this.townHoverCell = this.getTownMouseGrid();
+      }
+    } else if (this.mainCanvas && this.renderer) {
+      this.mouseWorldX = this.mouseX - this.mainCanvas.width / 2 + this.renderer.camera.x;
+      this.mouseWorldY = this.mouseY - this.mainCanvas.height / 2 + this.renderer.camera.y;
     }
   }
 
   handleMouseDown(e: MouseEvent) {
-    if (!this.gameStarted || !this.localPlayerID) return;
     if ((e.target as HTMLElement).closest?.('#inventory-panel, #stats-panel, #item-detail, #start-screen, .ui-panel')) return;
+    if (e.button === 0 && this.mode === 'town') {
+      if (e.shiftKey) {
+        this.townDragCamera = true;
+        this.townLastDragX = e.clientX;
+        this.townLastDragY = e.clientY;
+        return;
+      }
+      const cell = this.getTownMouseGrid();
+      if (cell) {
+        const building = this.getBuildingAtGrid(cell.x, cell.y);
+        if (building) {
+          this.townDragBuilding = building;
+          this.townDragStartCell = { x: cell.x, y: cell.y };
+          this.townSelectedBuilding = building;
+          this.callbacks.onTownSelectionChange?.(building);
+        }
+      }
+      return;
+    }
+    if (!this.gameStarted || !this.localPlayerID) return;
     if (e.button === 0) {
       this.network.send({ type: 'move', target_x: this.mouseWorldX, target_y: this.mouseWorldY });
       this.moveTargetIndicator = { x: this.mouseWorldX, y: this.mouseWorldY, life: 0.6 };
+    }
+  }
+
+  handleMouseUp(e: MouseEvent) {
+    if (e.button === 0 && this.mode === 'town') {
+      if (this.townDragCamera) {
+        this.townDragCamera = false;
+        return;
+      }
+      if (this.townDragBuilding) {
+      const cell = this.getTownMouseGrid();
+      const start = this.townDragStartCell;
+      if (cell && start && (cell.x !== start.x || cell.y !== start.y)) {
+        this.moveBuilding(this.townDragBuilding, cell.x, cell.y);
+      }
+      this.townDragBuilding = null;
+      this.townDragStartCell = null;
+        return;
+      }
     }
   }
 
@@ -522,8 +807,26 @@ export class GameEngine {
         if (this.moveTargetIndicator.life <= 0) this.moveTargetIndicator = null;
       }
 
-      const renderState = this.buildRenderState(now);
-      this.renderer?.render(renderState, this.localPlayerID, this.mouseWorldX, this.mouseWorldY, dt, this.moveTargetIndicator);
+      if (this.mode === 'town' && this.townState) {
+        const townScene: TownPixiScene = {
+          townState: this.townState,
+          buildingGridSize: BUILDING_GRID_SIZE,
+          townHoverCell: this.townHoverCell,
+          townDragBuilding: this.townDragBuilding,
+          townSelectedBuilding: this.townSelectedBuilding,
+        };
+        if (this.townRenderer && this.townCanvas) {
+          this.canvas = this.townCanvas;
+          this.townRenderer.render(townScene);
+        } else {
+          // fallback (legacy) if town pixi canvas not initialized
+          this.renderer?.render(null, this.localPlayerID, this.mouseWorldX, this.mouseWorldY, dt, this.moveTargetIndicator, townScene);
+        }
+      } else {
+        const renderState = this.buildRenderState(now);
+        if (this.mainCanvas) this.canvas = this.mainCanvas;
+        this.renderer?.render(renderState, this.localPlayerID, this.mouseWorldX, this.mouseWorldY, dt, this.moveTargetIndicator);
+      }
 
       requestAnimationFrame(loop);
     };

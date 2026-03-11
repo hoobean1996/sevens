@@ -144,13 +144,22 @@ export interface BuildQueueItem {
   completesAt: number;
 }
 
+/** 建筑在城镇网格上的格子坐标（非像素） */
+export interface BuildingPosition {
+  x: number;
+  y: number;
+}
+
 export interface TownState {
   resources: { wood: number; stone: number; ore: number; gold: number };
   buildings: Record<string, number>;
   caps: { equipSlots: number; materialSlots: number };
   /** 建造队列，长度 3；null 表示空位，未解锁的槽位也为 null */
   buildQueue: (BuildQueueItem | null)[];
+  /** 建筑在网格上的位置，键与 buildings 一致 */
+  buildingPositions?: Record<string, BuildingPosition>;
 }
+
 
 export interface TownBonus {
   atkMult: number;
