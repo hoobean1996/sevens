@@ -5,9 +5,11 @@
   z-index: 250; color: #ddd; overflow-y: auto;
 }
 .town-top {
-  width: 100%; text-align: center; padding: 28px 0 0;
+  width: 100%; display: flex; justify-content: space-between; align-items: flex-start; gap: 24px;
+  padding: 28px 24px 0; flex-wrap: nowrap;
   background: linear-gradient(180deg, rgba(255,215,0,0.04) 0%, transparent 100%);
 }
+.town-top-left { text-align: center; flex: 0 0 auto; }
 .town-title {
   font-size: 36px; color: #ffd700; letter-spacing: 6px;
   text-shadow: 0 0 24px rgba(255,215,0,0.4), 0 2px 0 #7a5a0b;
@@ -19,7 +21,63 @@
   border-radius: 999px; border: 1px solid rgba(255,215,0,0.2);
   background: rgba(0,0,0,0.4); font-size: 13px; color: #aaa;
 }
-.town-resources span { color: #ffd700; font-weight: bold; }
+.town-resource-row {
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.town-resource-value-wrap {
+  position: relative; display: inline-block; min-width: 1.2em;
+}
+.town-resource-value { color: #ffd700; font-weight: bold; }
+.town-resource-cap { color: #666; }
+.town-resource-float {
+  position: absolute; left: 50%; bottom: 100%;
+  transform: translateX(-50%);
+  font-size: 12px; font-weight: bold; color: #7cff7c;
+  text-shadow: 0 0 8px rgba(124,255,124,0.8);
+  white-space: nowrap;
+  animation: town-float-up 1.5s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes town-float-up {
+  from { opacity: 1; transform: translateX(-50%) translateY(0); }
+  to { opacity: 0; transform: translateX(-50%) translateY(-28px); }
+}
+
+/* 右侧：下次产出倒计时 + 进度条（靠右、横向排列） */
+.town-production-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 16px;
+  margin-left: auto;
+  margin-right: 24px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,215,0,0.25);
+  background: rgba(0,0,0,0.35);
+}
+.town-production-label {
+  font-size: 11px; color: #888; letter-spacing: 1px; white-space: nowrap;
+}
+.town-production-countdown {
+  font-size: 18px; font-weight: bold; color: #ffd700;
+  text-shadow: 0 0 12px rgba(255,215,0,0.4);
+  white-space: nowrap;
+  min-width: 2.2em;
+}
+.town-production-progress-wrap {
+  width: 80px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+.town-production-progress {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255,180,0,0.6), rgba(255,215,0,0.9));
+  transition: width 1s linear;
+}
 .town-center {
   flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
   padding: 32px 0 24px;
@@ -77,6 +135,46 @@
   color: #ffd700; cursor: pointer; transition: 0.2s;
 }
 .town-upgrade-btn:hover { background: rgba(255,215,0,0.18); }
+.town-upgrade-btn:disabled {
+  opacity: 0.6; cursor: not-allowed;
+  border-color: #666; color: #888;
+}
+.town-upgrade-btn:disabled:hover { background: rgba(255,215,0,0.08); }
+
+.town-queue {
+  max-width: 720px; width: 100%; padding: 0 24px 16px;
+}
+.town-queue h3 {
+  font-size: 12px; color: #ffd700; letter-spacing: 3px;
+  margin-bottom: 8px; text-align: center; position: relative;
+}
+.town-queue h3::before, .town-queue h3::after {
+  content: ''; position: absolute; top: 50%;
+  width: 50px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,215,0,0.3));
+}
+.town-queue h3::before { right: calc(50% + 55px); }
+.town-queue h3::after { left: calc(50% + 55px); transform: scaleX(-1); }
+.town-queue-slots {
+  display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+}
+.town-queue-slot {
+  min-width: 140px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(255,215,0,0.25);
+  background: rgba(0,0,0,0.35);
+  font-size: 12px; color: #aaa;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.town-queue-slot.locked {
+  border-color: #333; background: rgba(0,0,0,0.5);
+  color: #555;
+}
+.town-queue-slot-label { font-size: 11px; }
+.town-queue-slot-empty { color: #666; }
+.town-queue-slot-name { color: #ffd700; font-weight: bold; }
+.town-queue-slot-lvl { font-size: 11px; color: #888; }
+.town-queue-slot-remain { font-size: 11px; color: #7cff7c; }
+
 .town-footer {
   padding: 12px 0 20px; text-align: center; font-size: 11px; color: #444;
 }

@@ -137,6 +137,8 @@ function App() {
           resourceCaps={resourceCaps}
           onStartAdventure={handleStartAdventure}
           onUpgrade={handleUpgrade}
+          isBuildingInQueue={(type) => engineRef.current?.isBuildingInQueue?.(type) ?? false}
+          hasEmptyBuildQueueSlot={() => engineRef.current?.hasEmptyBuildQueueSlot?.() ?? true}
         />
       )}
 

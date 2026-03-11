@@ -137,10 +137,19 @@ export interface PickupMessage {
   slot: string;
 }
 
+/** 建造队列单格：某建筑的升级任务，completesAt 为 Unix 时间戳（秒） */
+export interface BuildQueueItem {
+  buildingType: string;
+  fromLevel: number;
+  completesAt: number;
+}
+
 export interface TownState {
   resources: { wood: number; stone: number; ore: number; gold: number };
   buildings: Record<string, number>;
   caps: { equipSlots: number; materialSlots: number };
+  /** 建造队列，长度 3；null 表示空位，未解锁的槽位也为 null */
+  buildQueue: (BuildQueueItem | null)[];
 }
 
 export interface TownBonus {

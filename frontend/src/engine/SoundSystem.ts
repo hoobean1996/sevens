@@ -175,7 +175,6 @@ export class SoundSystem {
     if (!this.enabled || !this.ctx) return;
     this.pickup();
     if (rarity < 3) return;
-    const t = this.ctx.currentTime;
     setTimeout(() => {
       if (!this.ctx) return;
       const t2 = this.ctx.currentTime;

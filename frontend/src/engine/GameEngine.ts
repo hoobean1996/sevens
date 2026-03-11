@@ -1,7 +1,7 @@
 import { Network } from './Network';
 import { Renderer } from './Renderer';
 import { sfx } from './SoundSystem';
-import { GameState, PlayerState, TownState, TownBonus } from './types';
+import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem } from './types';
 
 // Renderer is @ts-nocheck, declare shape for type safety here
 interface RendererLike {
@@ -52,6 +52,14 @@ const TOWN_UPGRADE_BASE_COST: Record<string, Record<string, number>> = {
   quarry: { wood: 20, stone: 5, ore: 5, gold: 15 },
   mine: { wood: 15, stone: 15, ore: 5, gold: 20 },
 };
+
+const BUILD_QUEUE_MAX_SLOTS = 3;
+const UPGRADE_BASE_TIME_SEC = 60;
+
+/** 升级到 L+1 所需时间（秒）：BaseTime × (1+L)^1.2 */
+function upgradeDurationSec(L: number): number {
+  return Math.max(1, Math.round(UPGRADE_BASE_TIME_SEC * Math.pow(1 + L, 1.2)));
+}
 
 export type GameMode = 'town' | 'start' | 'run';
 
@@ -191,8 +199,16 @@ export class GameEngine {
         resources: { wood: 0, stone: 0, ore: 0, gold: 0 },
         buildings: { hall: 1, warehouse: 0, lumber: 1, quarry: 1, mine: 1 },
         caps: { equipSlots: 20, materialSlots: 100 },
+        buildQueue: [null, null, null],
       };
     }
+    if (!this.townState.buildQueue || !Array.isArray(this.townState.buildQueue)) {
+      this.townState.buildQueue = [null, null, null];
+    }
+    while (this.townState.buildQueue.length < BUILD_QUEUE_MAX_SLOTS) {
+      this.townState.buildQueue.push(null);
+    }
+    this.townState.buildQueue = this.townState.buildQueue.slice(0, BUILD_QUEUE_MAX_SLOTS);
     this.persistTownState();
   }
 
@@ -210,12 +226,39 @@ export class GameEngine {
     return { wood: cap, stone: cap, ore: cap };
   }
 
+  /** 根据市政厅等级返回已解锁的建造队列槽位数（1/2/3） */
+  getBuildQueueSlotsUnlocked(): number {
+    if (!this.townState) return 1;
+    const hall = this.townState.buildings.hall ?? 1;
+    if (hall >= 6) return 3;
+    if (hall >= 3) return 2;
+    return 1;
+  }
+
+  /** 检查某建筑是否已在队列中 */
+  isBuildingInQueue(type: string): boolean {
+    if (!this.townState?.buildQueue) return false;
+    return this.townState.buildQueue.some((s) => s !== null && s.buildingType === type);
+  }
+
+  /** 是否有空位可加入新升级任务 */
+  hasEmptyBuildQueueSlot(): boolean {
+    const unlocked = this.getBuildQueueSlotsUnlocked();
+    const q = this.townState?.buildQueue ?? [];
+    for (let i = 0; i < unlocked && i < q.length; i++) {
+      if (q[i] === null) return true;
+    }
+    return false;
+  }
+
   upgradeBuilding(type: string) {
     if (!this.townState) return;
     const b = this.townState.buildings;
     const current = b[type] ?? 0;
     if (current >= 10) return;
     if (type !== 'hall' && current >= b.hall) return;
+    if (this.isBuildingInQueue(type)) return;
+    if (!this.hasEmptyBuildQueueSlot()) return;
 
     const base = TOWN_UPGRADE_BASE_COST[type];
     if (!base) return;
@@ -235,9 +278,44 @@ export class GameEngine {
     r.stone -= cost.stone;
     r.ore -= cost.ore;
     r.gold -= cost.gold;
-    b[type] = current + 1;
+
+    const durationSec = upgradeDurationSec(L);
+    const completesAt = Math.floor(Date.now() / 1000) + durationSec;
+    const item: BuildQueueItem = { buildingType: type, fromLevel: current, completesAt };
+    const q = this.townState.buildQueue;
+    for (let i = 0; i < this.getBuildQueueSlotsUnlocked() && i < q.length; i++) {
+      if (q[i] === null) {
+        q[i] = item;
+        break;
+      }
+    }
     this.persistTownState();
     this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
+  }
+
+  /** 每帧检查建造队列，到期的升级立即完成（任意模式均推进时间） */
+  private processBuildQueue() {
+    if (!this.townState?.buildQueue) return;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const b = this.townState.buildings;
+    const q = this.townState.buildQueue;
+    let changed = false;
+    for (let i = 0; i < q.length; i++) {
+      const item = q[i];
+      if (item && item.completesAt <= nowSec) {
+        const prev = b[item.buildingType] ?? 0;
+        if (prev === item.fromLevel) {
+          b[item.buildingType] = item.fromLevel + 1;
+          q[i] = null;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      this.persistTownState();
+      this.computeTownBonus();
+      this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
+    }
   }
 
   computeTownBonus() {
@@ -396,13 +474,16 @@ export class GameEngine {
       const dt = Math.min(0.05, (now - this.lastTime) / 1000);
       this.lastTime = now;
 
-      // Town resource ticking
-      if (this.mode === 'town' && this.townState) {
-        this.townResAccum += dt;
-        if (this.townResAccum >= 10) {
-          const ticks = Math.floor(this.townResAccum / 10);
-          this.townResAccum -= ticks * 10;
-          this.applyResourceTicks(ticks);
+      // Town: 资源产出（仅城镇界面时推进）与建造队列完成（任意模式均推进，支持离线完成）
+      if (this.townState) {
+        this.processBuildQueue();
+        if (this.mode === 'town') {
+          this.townResAccum += dt;
+          if (this.townResAccum >= 10) {
+            const ticks = Math.floor(this.townResAccum / 10);
+            this.townResAccum -= ticks * 10;
+            this.applyResourceTicks(ticks);
+          }
         }
       }
 
