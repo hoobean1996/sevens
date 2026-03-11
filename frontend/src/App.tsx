@@ -128,6 +128,7 @@ function App() {
         townCanvasRef.current.width = w;
         townCanvasRef.current.height = h;
         engineRef.current.townRenderer.resize(w, h);
+        engineRef.current.syncTownZoom();
       }
     };
     if (mode === 'town') {
@@ -177,6 +178,7 @@ function App() {
           townCanvasRef.current.width = w;
           townCanvasRef.current.height = h;
           engine.townRenderer?.resize(w, h);
+          engine.syncTownZoom();
         }
       } else {
         const c = mainCanvasRef.current;

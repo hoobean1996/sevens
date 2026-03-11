@@ -64,7 +64,11 @@ export class TownPixiRenderer {
   // Camera state for town map
   private cameraX = 0;
   private cameraY = 0;
-  private zoom = 3;
+  private zoom = 1;
+  private initialZoomSet = false;
+  // Store CSS dimensions for coordinate calculations
+  private cssWidth = 0;
+  private cssHeight = 0;
 
   constructor(view: HTMLCanvasElement) {
     this.view = view;
@@ -121,14 +125,43 @@ export class TownPixiRenderer {
   resize(w: number, h: number) {
     if (!this.app?.renderer) return;
     this.app.renderer.resize(w, h);
+    // Store CSS dimensions
+    this.cssWidth = w;
+    this.cssHeight = h;
     if (!this.root) return;
+
+    // Calculate initial zoom to fit entire map on first resize
+    if (!this.initialZoomSet && w > 0 && h > 0) {
+      const mapW = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_W / 2);
+      const mapH = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_H / 2);
+      const zoomX = w / mapW * 0.85;
+      const zoomY = h / mapH * 0.85;
+      this.zoom = Math.min(zoomX, zoomY);
+      this.zoom = Math.max(0.5, Math.min(3.5, this.zoom));
+      this.initialZoomSet = true;
+    }
+
     this.applyCameraTransform();
+  }
+
+  getZoom(): number {
+    return this.zoom;
+  }
+
+  getCamera(): { x: number; y: number } {
+    return { x: this.cameraX, y: this.cameraY };
+  }
+
+  getDimensions(): { width: number; height: number } {
+    return { width: this.cssWidth, height: this.cssHeight };
   }
 
   private applyCameraTransform() {
     if (!this.root || !this.app?.renderer) return;
-    const w = this.app.renderer.width;
-    const h = this.app.renderer.height;
+    // Use CSS dimensions - get from canvas bounding rect as fallback
+    const rect = this.view.getBoundingClientRect();
+    const w = this.cssWidth || rect.width || 1;
+    const h = this.cssHeight || rect.height || 1;
     const centerGx = (TOWN_GRID_W - 1) / 2;
     const centerGy = (TOWN_GRID_H - 1) / 2;
     const isoCenter = gridToScreen(centerGx, centerGy);
@@ -147,7 +180,7 @@ export class TownPixiRenderer {
   }
 
   setZoom(zoom: number) {
-    const clamped = Math.max(1.5, Math.min(3.5, zoom));
+    const clamped = Math.max(0.5, Math.min(3.5, zoom));
     this.zoom = clamped;
     this.applyCameraTransform();
   }

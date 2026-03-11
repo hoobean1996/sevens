@@ -173,10 +173,17 @@ export class GameEngine {
       this.townCanvas = canvas;
       this.townRenderer = new TownPixiRenderer(canvas);
       await this.townRenderer.init();
-      this.townRenderer.setZoom(this.townZoom);
+      // Don't override the auto-calculated zoom, sync from renderer instead
       this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
     }
     if (this.mode === 'town') this.canvas = canvas;
+  }
+
+  /** Sync townZoom from renderer after resize */
+  syncTownZoom() {
+    if (this.townRenderer) {
+      this.townZoom = this.townRenderer.getZoom();
+    }
   }
 
   private setupNetworkHandlers() {
@@ -339,18 +346,20 @@ export class GameEngine {
   getTownMouseGrid(): { x: number; y: number } | null {
     if (this.mode !== 'town' || !this.canvas) return null;
     const rect = this.canvas.getBoundingClientRect();
-    const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
-    const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
-    const canvasX = (this.mouseX - rect.left) * scaleX;
-    const canvasY = (this.mouseY - rect.top) * scaleY;
+    // Use CSS coordinates consistently (rect.width/height are always CSS pixels)
+    const canvasX = this.mouseX - rect.left;
+    const canvasY = this.mouseY - rect.top;
+    // Always get current zoom and camera from renderer to ensure sync
+    const currentZoom = this.townRenderer?.getZoom() ?? this.townZoom;
+    const camera = this.townRenderer?.getCamera() ?? { x: this.townCameraX, y: this.townCameraY };
     // Must match TownPixiRenderer centering + camera transform (inverse)
     const isoCenter = gridToScreen((TOWN_GRID_W - 1) / 2, (TOWN_GRID_H - 1) / 2);
-    let dx = canvasX - this.canvas.width / 2;
-    let dy = canvasY - this.canvas.height / 2;
-    dx -= this.townCameraX;
-    dy -= this.townCameraY;
-    dx /= this.townZoom;
-    dy /= this.townZoom;
+    let dx = canvasX - rect.width / 2;
+    let dy = canvasY - rect.height / 2;
+    dx -= camera.x;
+    dy -= camera.y;
+    dx /= currentZoom;
+    dy /= currentZoom;
     const isoScreenX = dx + isoCenter.x;
     const isoScreenY = dy + isoCenter.y;
     const { gx: gxf, gy: gyf } = screenToGrid(isoScreenX, isoScreenY);
@@ -681,7 +690,7 @@ export class GameEngine {
     const before = this.getTownMouseGrid();
 
     const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    this.townZoom = Math.max(1.5, Math.min(3.5, this.townZoom * factor));
+    this.townZoom = Math.max(0.5, Math.min(3.5, this.townZoom * factor));
     this.townRenderer.setZoom(this.townZoom);
 
     if (before) {
