@@ -142,9 +142,13 @@ export class GameEngine {
   /** Sync townZoom from renderer after resize */
   syncTownZoom() {
     if (!this.townRenderer) return;
-    this.townController.syncZoom(this.townRenderer.getZoom());
+    const limits = this.townRenderer.getZoomLimits();
+    this.townController.setZoomLimits({ min: limits.min, max: limits.max });
+    const zoom = Math.max(limits.min, Math.min(limits.max, this.townRenderer.getZoom()));
+    this.townController.syncZoom(zoom);
     const camera = this.townRenderer.getCamera();
     this.townController.setCamera(camera.x, camera.y);
+    this.townRenderer.updateCamera(this.townController.getCameraState());
   }
 
   private setupNetworkHandlers() {
@@ -403,6 +407,7 @@ export class GameEngine {
     e.preventDefault();
     this.townController.handleWheel(this.canvas, e.clientX, e.clientY, e.deltaY);
     this.townRenderer.updateCamera(this.townController.getCameraState());
+    this.townController.syncZoom(this.townRenderer.getZoom());
   }
 
   handleMouseMove(e: MouseEvent) {

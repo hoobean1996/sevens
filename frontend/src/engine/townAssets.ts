@@ -3,6 +3,10 @@ import * as PIXI from 'pixi.js';
 const TOWN_MANIFEST = {
   bundles: [
     {
+      name: 'town-bg',
+      assets: [{ alias: 'town-background', src: '/assets/background/town-background.png' }],
+    },
+    {
       name: 'town-floor',
       assets: [
         { alias: 'town-floor-turf', src: '/assets/town/floor/turf.png' },
@@ -39,7 +43,7 @@ export async function ensureTownAssetsReady(): Promise<void> {
     assetsInitialized = true;
   }
   if (!townBundlesLoaded) {
-    await PIXI.Assets.loadBundle(['town-floor', 'town-buildings']);
+    await PIXI.Assets.loadBundle(['town-bg', 'town-floor', 'town-buildings']);
     townBundlesLoaded = true;
   }
 }

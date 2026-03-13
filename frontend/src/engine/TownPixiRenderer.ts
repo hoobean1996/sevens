@@ -33,6 +33,7 @@ export class TownPixiRenderer {
   private view: HTMLCanvasElement;
   private app: PIXI.Application | null = null;
   private root: PIXI.Container | null = null;
+  private bgSprite: PIXI.Sprite | null = null;
   private groundBase: PIXI.Graphics | null = null;
   private groundLayer: PIXI.Container | null = null;
   private overlayLayer: PIXI.Container | null = null;
@@ -54,6 +55,7 @@ export class TownPixiRenderer {
   private lastHoverKey = '';
   private lastPreviewKey = '';
   private sortDirty = false;
+  private zoomLimits: { min: number; default: number; max: number } = { min: 0.5, default: 1.5, max: 3.5 };
 
   constructor(view: HTMLCanvasElement) {
     this.view = view;
@@ -85,6 +87,14 @@ export class TownPixiRenderer {
 
     await ensureTownAssetsReady();
     this.assetsReady = true;
+
+    const bgTexture = getTownTexture('town-background');
+    if (bgTexture) {
+      this.bgSprite = new PIXI.Sprite(bgTexture);
+      this.bgSprite.anchor.set(0.5, 0.5);
+      this.bgSprite.position.set(0, 0);
+      this.root.addChildAt(this.bgSprite, 0);
+    }
   }
 
   destroy() {
@@ -92,6 +102,7 @@ export class TownPixiRenderer {
     this.app.destroy(true, { children: true, texture: false });
     this.app = null;
     this.root = null;
+    this.bgSprite = null;
     this.groundBase = null;
     this.groundLayer = null;
     this.overlayLayer = null;
@@ -106,13 +117,51 @@ export class TownPixiRenderer {
     this.app.renderer.resize(width, height);
     this.cssWidth = width;
     this.cssHeight = height;
-    if (this.snapshot?.townState.map && !this.initialZoomSet && width > 0 && height > 0) {
-      const mapW = (this.snapshot.townState.map.width + this.snapshot.townState.map.height) * (ISO_TILE_W / 2);
-      const mapH = (this.snapshot.townState.map.width + this.snapshot.townState.map.height) * (ISO_TILE_H / 2);
-      this.zoom = Math.max(0.5, Math.min(3.5, Math.min(width / mapW, height / mapH) * 0.85));
-      this.initialZoomSet = true;
+    if (this.snapshot?.townState.map && width > 0 && height > 0) {
+      this.updateZoomLimits(width, height);
+      if (!this.initialZoomSet) {
+        const { min, default: def, max } = this.zoomLimits;
+        this.zoom = Math.max(min, Math.min(max, def));
+        this.initialZoomSet = true;
+      }
     }
     this.applyCameraTransform();
+  }
+
+  getZoomLimits() {
+    return this.zoomLimits;
+  }
+
+  private updateZoomLimits(viewportW: number, viewportH: number) {
+    if (!this.snapshot?.townState.map) return;
+    const map = this.snapshot.townState.map;
+    const totalW = (map.width + map.height) * (ISO_TILE_W / 2);
+    const totalH = (map.width + map.height) * (ISO_TILE_H / 2);
+    const mapExtentW = totalW * 2;
+    const mapExtentH = totalH * 2;
+
+    let minZoom: number;
+    let defaultZoom: number;
+    const maxZoom = 2.5;
+
+    if (this.bgSprite?.texture?.width) {
+      const texW = this.bgSprite.texture.width;
+      const texH = this.bgSprite.texture.height;
+      const coverScale = Math.max(mapExtentW / texW, mapExtentH / texH);
+      const bgWorldW = texW * coverScale;
+      const bgWorldH = texH * coverScale;
+      minZoom = Math.max(viewportW / bgWorldW, viewportH / bgWorldH) * 1.05;
+      defaultZoom = Math.min(viewportW / bgWorldW, viewportH / bgWorldH) * 0.95;
+    } else {
+      minZoom = Math.max(viewportW / mapExtentW, viewportH / mapExtentH) * 1.05;
+      defaultZoom = Math.min(viewportW / mapExtentW, viewportH / mapExtentH) * 0.85;
+    }
+
+    this.zoomLimits = {
+      min: Math.max(0.3, minZoom),
+      default: Math.max(minZoom, Math.min(maxZoom, defaultZoom)),
+      max: maxZoom,
+    };
   }
 
   getZoom() {
@@ -126,7 +175,8 @@ export class TownPixiRenderer {
   updateCamera(camera: { x: number; y: number; zoom: number }) {
     this.cameraX = camera.x;
     this.cameraY = camera.y;
-    this.zoom = camera.zoom;
+    const { min, max } = this.zoomLimits;
+    this.zoom = Math.max(min, Math.min(max, camera.zoom));
     this.applyCameraTransform();
   }
 
@@ -176,9 +226,20 @@ export class TownPixiRenderer {
     this.groundBase.clear();
     const totalW = (map.width + map.height) * (ISO_TILE_W / 2);
     const totalH = (map.width + map.height) * (ISO_TILE_H / 2);
-    this.groundBase.beginFill(0x080910, 1);
-    this.groundBase.drawRect(-totalW, -totalH, totalW * 2, totalH * 2);
-    this.groundBase.endFill();
+
+    if (this.bgSprite && this.bgSprite.texture?.width) {
+      const texW = this.bgSprite.texture.width;
+      const texH = this.bgSprite.texture.height;
+      const areaW = totalW * 2;
+      const areaH = totalH * 2;
+      const scale = Math.max(areaW / texW, areaH / texH);
+      this.bgSprite.scale.set(scale);
+      this.bgSprite.position.set(0, 0);
+    } else {
+      this.groundBase.beginFill(0x080910, 1);
+      this.groundBase.drawRect(-totalW, -totalH, totalW * 2, totalH * 2);
+      this.groundBase.endFill();
+    }
 
     this.groundLayer.removeChildren();
     this.overlayLayer.removeChildren();

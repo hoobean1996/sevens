@@ -91,6 +91,8 @@ export class TownController {
   private cameraX = 0;
   private cameraY = 0;
   private zoom = 3;
+  private zoomMin = 0.5;
+  private zoomMax = 3.5;
 
   constructor(
     private readonly onTownUpdate: (town: TownState, caps: { wood: number; stone: number; ore: number }) => void,
@@ -181,6 +183,11 @@ export class TownController {
 
   syncZoom(zoom: number) {
     this.zoom = zoom;
+  }
+
+  setZoomLimits(limits: { min: number; max: number }) {
+    this.zoomMin = limits.min;
+    this.zoomMax = limits.max;
   }
 
   setCamera(x: number, y: number) {
@@ -294,7 +301,7 @@ export class TownController {
   handleWheel(canvas: HTMLCanvasElement, clientX: number, clientY: number, deltaY: number) {
     const before = this.getTownMouseGrid(canvas, clientX, clientY);
     const factor = deltaY < 0 ? 1.1 : 0.9;
-    this.zoom = Math.max(0.5, Math.min(3.5, this.zoom * factor));
+    this.zoom = Math.max(this.zoomMin, Math.min(this.zoomMax, this.zoom * factor));
     if (!before) return;
     const after = this.getTownMouseGrid(canvas, clientX, clientY);
     if (!after) return;
