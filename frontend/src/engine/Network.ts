@@ -11,8 +11,10 @@ export class Network {
   onPickup: MessageHandler<PickupMessage> | null = null;
   onShopResult: MessageHandler<ShopResultMessage> | null = null;
   private messageQueue: any[] = [];
+  private intentionalDisconnect = false;
 
   connect() {
+    this.intentionalDisconnect = false;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}/ws`;
     console.log('Connecting to', url);
@@ -56,7 +58,10 @@ export class Network {
     this.ws.onclose = () => {
       console.log('WebSocket disconnected');
       this.connected = false;
-      setTimeout(() => this.connect(), 2000);
+      this.ws = null;
+      if (!this.intentionalDisconnect) {
+        setTimeout(() => this.connect(), 2000);
+      }
     };
 
     this.ws.onerror = (err) => {
@@ -86,5 +91,15 @@ export class Network {
 
   sendShopBuy(shopId: string, itemId: string) {
     this.send({ type: 'shop_buy', shop_id: shopId, item_id: itemId });
+  }
+
+  /** 主动断开连接（如返回城镇），不再自动重连 */
+  disconnect() {
+    this.intentionalDisconnect = true;
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.connected = false;
   }
 }

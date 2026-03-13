@@ -326,6 +326,15 @@ export class GameEngine {
     this.townController.setInteractionMode('preview');
     this.mode = 'town';
     this.gameStarted = false;
+    this.localPlayerID = null;
+    this.prevSnapshot = null;
+    this.currSnapshot = null;
+    this.cachedPlayerData = null;
+    this.moveTargetIndicator = null;
+    this.lastWave = 0;
+    this.lastHP = null;
+    this.lastLevel = null;
+    this.network.disconnect();
     this.callbacks.onModeChange('town');
   }
 
