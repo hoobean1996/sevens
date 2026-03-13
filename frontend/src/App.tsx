@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GameEngine, GameMode } from './engine/GameEngine';
-import { PlayerState, TownState, ShopState } from './engine/types';
+import { BuildingInstance, PlayerState, ShopState, TownState } from './engine/types';
 import StartScreen from './components/StartScreen';
 import TownScreen from './components/TownScreen';
 import HUD from './components/HUD';
@@ -21,176 +21,168 @@ function App() {
 
   const [mode, setMode] = useState<GameMode>('town');
   modeRef.current = mode;
+
   const [player, setPlayer] = useState<PlayerState | null>(null);
   const [wave, setWave] = useState(0);
   const [announceWave, setAnnounceWave] = useState(0);
   const [townState, setTownState] = useState<TownState | null>(null);
+  const [selectedBuilding, setSelectedBuilding] = useState<BuildingInstance | null>(null);
   const [resourceCaps, setResourceCaps] = useState({ wood: 0, stone: 0, ore: 0 });
-  const [selectedBuildingKey, setSelectedBuildingKey] = useState<string | null>(null);
   const [showInventory, setShowInventory] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showEscMenu, setShowEscMenu] = useState(false);
   const [pickupEvent, setPickupEvent] = useState<{ name: string; rarity: number; slot: string } | null>(null);
-  const pickupCounter = useRef(0);
-
-  // Arena mode state
   const [arenaMode, setArenaMode] = useState(false);
   const [shopPhase, setShopPhase] = useState(false);
   const [shopTimer, setShopTimer] = useState(0);
   const [activeShop, setActiveShop] = useState<ShopState | null>(null);
   const [showShopPanel, setShowShopPanel] = useState(false);
 
-  // Initialize engine once
   useEffect(() => {
     const engine = new GameEngine({
-      onModeChange: (m) => setMode(m),
-      onHUDUpdate: (p, w, arena, shopPh, shopTm) => {
-        setPlayer({ ...p });
-        setWave(w);
+      onModeChange: (nextMode) => setMode(nextMode),
+      onHUDUpdate: (nextPlayer, nextWave, arena, shopPh, shopTm) => {
+        setPlayer({ ...nextPlayer });
+        setWave(nextWave);
         setArenaMode(arena || false);
         setShopPhase(shopPh || false);
         setShopTimer(shopTm || 0);
       },
-      onWaveAnnounce: (w) => setAnnounceWave(w),
-      onPickup: (name, rarity, slot) => {
-        pickupCounter.current++;
-        setPickupEvent({ name, rarity, slot });
-      },
-      onInventoryUpdate: (p) => setPlayer({ ...p }),
-      onTownUpdate: (t, caps) => {
-        setTownState({ ...t });
+      onWaveAnnounce: (nextWave) => setAnnounceWave(nextWave),
+      onPickup: (name, rarity, slot) => setPickupEvent({ name, rarity, slot }),
+      onInventoryUpdate: (nextPlayer) => setPlayer({ ...nextPlayer }),
+      onTownUpdate: (nextTown, caps) => {
+        setTownState(nextTown);
         setResourceCaps({ ...caps });
+        setSelectedBuilding((current) => nextTown.buildingInstances.find((instance) => instance.id === current?.id) ?? null);
       },
-      onTownSelectionChange: (key) => setSelectedBuildingKey(key),
+      onTownSelectionChange: (entityId) => {
+        setSelectedBuilding(engine.getSelectedTownBuilding(entityId));
+      },
       onShopOpen: (shop) => {
         setActiveShop(shop);
         setShowShopPanel(true);
       },
       onShopResult: (success, message) => {
-        // Could show a toast notification here
         console.log('Shop result:', success, message);
       },
     });
 
     engine.initTownState();
-    setTownState(engine.townState ? { ...engine.townState } : null);
+    setTownState(engine.townState);
+    setSelectedBuilding(engine.getSelectedTownBuilding(null));
     setResourceCaps(engine.getResourceCaps());
-
     engineRef.current = engine;
   }, []);
 
-  // Initialize canvas and start loop once (Pixi 城镇需 await init 完成)
   useEffect(() => {
     const engine = engineRef.current;
     const townCanvas = townCanvasRef.current;
     const wrap = mapWrapRef.current;
     if (!engine || !townCanvas) return;
     let cancelled = false;
+
     (async () => {
       await engine.initTownCanvas(townCanvas);
       if (cancelled) return;
-      // 确保首帧前就有尺寸，否则 Pixi 会画到 0x0 看不到
-      const w = wrap?.clientWidth ?? 0;
-      const h = wrap?.clientHeight ?? 0;
-      if (w > 0 && h > 0 && engine.townRenderer) {
-        townCanvas.width = w;
-        townCanvas.height = h;
-        engine.townRenderer.resize(w, h);
+      const width = wrap?.clientWidth ?? 0;
+      const height = wrap?.clientHeight ?? 0;
+      if (width > 0 && height > 0 && engine.townRenderer) {
+        townCanvas.width = width;
+        townCanvas.height = height;
+        engine.townRenderer.resize(width, height);
+        engine.syncTownZoom();
       }
       if (!cancelled) engine.startLoop();
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Re-attach canvas when switching mode (town uses Pixi canvas; run/start use main canvas)
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
-    if (mode === 'town') {
-      const canvas = townCanvasRef.current;
-      if (canvas) void engine.initTownCanvas(canvas);
-    } else {
-      if (mainCanvasRef.current) engine.initCanvas(mainCanvasRef.current);
+    if (mode === 'town' && townCanvasRef.current) {
+      void engine.initTownCanvas(townCanvasRef.current);
+      return;
     }
+    if (mainCanvasRef.current) engine.initCanvas(mainCanvasRef.current);
   }, [mode]);
 
-  // Town mode: size town canvas to map container; run mode: fullscreen for main canvas
   useEffect(() => {
     const engine = engineRef.current;
     const mainCanvas = mainCanvasRef.current;
     if (!engine) return;
-    let ro: ResizeObserver | null = null;
+
+    let observer: ResizeObserver | null = null;
     const sizeTownCanvas = () => {
-      if (!mapWrapRef.current || !townCanvasRef.current) return;
-      const w = mapWrapRef.current.clientWidth;
-      const h = mapWrapRef.current.clientHeight;
-      if (w > 0 && h > 0 && engineRef.current?.townRenderer) {
-        townCanvasRef.current.width = w;
-        townCanvasRef.current.height = h;
-        engineRef.current.townRenderer.resize(w, h);
-        engineRef.current.syncTownZoom();
-      }
+      if (!mapWrapRef.current || !townCanvasRef.current || !engine.townRenderer) return;
+      const width = mapWrapRef.current.clientWidth;
+      const height = mapWrapRef.current.clientHeight;
+      if (width <= 0 || height <= 0) return;
+      townCanvasRef.current.width = width;
+      townCanvasRef.current.height = height;
+      engine.townRenderer.resize(width, height);
+      engine.syncTownZoom();
     };
+
     if (mode === 'town') {
       const raf = requestAnimationFrame(() => {
         sizeTownCanvas();
-        ro = new ResizeObserver(sizeTownCanvas);
-        if (mapWrapRef.current) ro.observe(mapWrapRef.current);
+        observer = new ResizeObserver(sizeTownCanvas);
+        if (mapWrapRef.current) observer.observe(mapWrapRef.current);
       });
       return () => {
         cancelAnimationFrame(raf);
-        ro?.disconnect();
+        observer?.disconnect();
       };
-    } else {
-      if (!engine.renderer || !mainCanvas) return;
+    }
+
+    if (mainCanvas && engine.renderer) {
       mainCanvas.width = window.innerWidth;
       mainCanvas.height = window.innerHeight;
-      (engine.renderer as { resize: (w?: number, h?: number) => void }).resize();
+      engine.renderer.resize();
     }
   }, [mode]);
 
-  // Global event listeners
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
 
-    const onKeyDown = (e: KeyboardEvent) => {
-      engine.handleKeyDown(e);
+    const onKeyDown = (event: KeyboardEvent) => {
+      engine.handleKeyDown(event);
       setShowInventory(engine.inventoryOpen);
       setShowStats(engine.statsPanelOpen);
       setShowEscMenu(engine.escMenuOpen);
       setShowShopPanel(engine.shopPanelOpen);
     };
-    const onKeyUp = (e: KeyboardEvent) => engine.handleKeyUp(e);
-    const onMouseMove = (e: MouseEvent) => engine.handleMouseMove(e);
-    const onMouseDown = (e: MouseEvent) => engine.handleMouseDown(e);
-    const onMouseUp = (e: MouseEvent) => engine.handleMouseUp(e);
-    const onContextMenu = (e: MouseEvent) => {
-      if (engine.gameStarted && !(e.target as HTMLElement).closest?.('.ui-panel')) {
-        e.preventDefault();
-      }
-    };
+
     const onResize = () => {
       if (modeRef.current === 'town' && mapWrapRef.current && townCanvasRef.current) {
-        const w = mapWrapRef.current.clientWidth;
-        const h = mapWrapRef.current.clientHeight;
-        if (w > 0 && h > 0) {
-          townCanvasRef.current.width = w;
-          townCanvasRef.current.height = h;
-          engine.townRenderer?.resize(w, h);
+        const width = mapWrapRef.current.clientWidth;
+        const height = mapWrapRef.current.clientHeight;
+        if (width > 0 && height > 0) {
+          townCanvasRef.current.width = width;
+          townCanvasRef.current.height = height;
+          engine.townRenderer?.resize(width, height);
           engine.syncTownZoom();
         }
-      } else {
-        const c = mainCanvasRef.current;
-        if (c) {
-          c.width = window.innerWidth;
-          c.height = window.innerHeight;
-        }
+      } else if (mainCanvasRef.current) {
+        mainCanvasRef.current.width = window.innerWidth;
+        mainCanvasRef.current.height = window.innerHeight;
         engine.renderer?.resize();
       }
     };
-    const onWheel = (e: WheelEvent) => {
-      engine.handleWheel(e);
+
+    const onKeyUp = (event: KeyboardEvent) => engine.handleKeyUp(event);
+    const onMouseMove = (event: MouseEvent) => engine.handleMouseMove(event);
+    const onMouseDown = (event: MouseEvent) => engine.handleMouseDown(event);
+    const onMouseUp = (event: MouseEvent) => engine.handleMouseUp(event);
+    const onWheel = (event: WheelEvent) => engine.handleWheel(event);
+    const onContextMenu = (event: MouseEvent) => {
+      if (engine.gameStarted && !(event.target as HTMLElement).closest?.('.ui-panel')) event.preventDefault();
     };
 
     window.addEventListener('keydown', onKeyDown);
@@ -198,9 +190,9 @@ function App() {
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
-    window.addEventListener('contextmenu', onContextMenu);
     window.addEventListener('resize', onResize);
     window.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('contextmenu', onContextMenu);
 
     return () => {
       window.removeEventListener('keydown', onKeyDown);
@@ -208,25 +200,21 @@ function App() {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
-      window.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('resize', onResize);
       window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('contextmenu', onContextMenu);
     };
   }, []);
 
-  const handleSelectHero = useCallback((hero: string) => {
-    engineRef.current?.selectHero(hero);
-  }, []);
+  const handleSelectHero = useCallback((hero: string) => engineRef.current?.selectHero(hero), []);
+  const handleStartAdventure = useCallback(() => engineRef.current?.startAdventure(), []);
 
-  const handleStartAdventure = useCallback(() => {
-    engineRef.current?.startAdventure();
-  }, []);
-
-  const handleUpgrade = useCallback((type: string) => {
+  const handleUpgrade = useCallback((buildingId: string) => {
     const engine = engineRef.current;
     if (!engine) return;
-    engine.upgradeBuilding(type);
-    setTownState(engine.townState ? { ...engine.townState } : null);
+    engine.upgradeBuilding(buildingId);
+    setTownState(engine.townState);
+    setSelectedBuilding(engine.getSelectedTownBuilding(engine.getSelectedTownBuildingId()));
     setResourceCaps(engine.getResourceCaps());
   }, []);
 
@@ -247,13 +235,16 @@ function App() {
           mapWrapRef={mapWrapRef}
           townState={townState}
           resourceCaps={resourceCaps}
-          selectedBuildingKey={selectedBuildingKey}
-          onClearSelection={() => engineRef.current?.clearTownSelection()}
+          selectedBuilding={selectedBuilding}
+          onClearSelection={() => {
+            engineRef.current?.clearTownSelection();
+            setSelectedBuilding(null);
+          }}
           onStartAdventure={handleStartAdventure}
           onUpgrade={handleUpgrade}
-          isBuildingInQueue={(type) => engineRef.current?.isBuildingInQueue?.(type) ?? false}
-          hasEmptyBuildQueueSlot={() => engineRef.current?.hasEmptyBuildQueueSlot?.() ?? true}
-          getUpgradeCost={(type) => engineRef.current?.getUpgradeCost?.(type) ?? { wood: 0, stone: 0, ore: 0, gold: 0 }}
+          isBuildingInQueue={(buildingId) => engineRef.current?.isBuildingInQueue(buildingId) ?? false}
+          hasEmptyBuildQueueSlot={() => engineRef.current?.hasEmptyBuildQueueSlot() ?? true}
+          getUpgradeCost={(buildingId) => engineRef.current?.getUpgradeCost(buildingId) ?? { wood: 0, stone: 0, ore: 0, gold: 0 }}
         >
           <canvas ref={townCanvasRef} id="town" style={{ display: 'block', width: '100%', height: '100%' }} />
         </TownScreen>
@@ -261,20 +252,11 @@ function App() {
         <canvas ref={mainCanvasRef} id="game" style={{ display: 'block' }} />
       )}
 
-      {mode === 'start' && (
-        <StartScreen onSelectHero={handleSelectHero} />
-      )}
+      {mode === 'start' && <StartScreen onSelectHero={handleSelectHero} />}
 
       {mode === 'run' && (
         <>
-          <HUD
-            player={player}
-            wave={wave}
-            townBonus={townBonus}
-            arenaMode={arenaMode}
-            shopPhase={shopPhase}
-            shopTimer={shopTimer}
-          />
+          <HUD player={player} wave={wave} townBonus={townBonus} arenaMode={arenaMode} shopPhase={shopPhase} shopTimer={shopTimer} />
           <SkillBar player={player} />
           <WaveAnnounce wave={announceWave} />
           <PickupNotifs pickupEvent={pickupEvent} />
@@ -323,9 +305,7 @@ function App() {
             <ShopPanel
               shop={activeShop}
               playerGold={player?.gold || 0}
-              onBuy={(shopId, itemId) => {
-                engineRef.current?.network.sendShopBuy(shopId, itemId);
-              }}
+              onBuy={(shopId, itemId) => engineRef.current?.network.sendShopBuy(shopId, itemId)}
               onClose={() => {
                 setShowShopPanel(false);
                 setActiveShop(null);

@@ -1,9 +1,9 @@
 import { Network } from './Network';
 import { Renderer } from './Renderer';
-import { TownPixiRenderer, TownPixiScene } from './TownPixiRenderer';
+import { TownPixiRenderer } from './TownPixiRenderer';
+import { TownController } from './TownController';
 import { sfx } from './SoundSystem';
-import { GameState, PlayerState, TownState, TownBonus, BuildQueueItem, BuildingPosition, ShopState } from './types';
-import { TOWN_GRID_W, TOWN_GRID_H, BUILDING_GRID_SIZE, gridToScreen, screenToGrid, pointInDiamond } from './townConfig';
+import { BuildingInstance, GameState, PlayerState, TownState, TownBonus, ShopState } from './types';
 
 // Renderer is @ts-nocheck, declare shape for type safety here
 interface RendererLike {
@@ -23,44 +23,6 @@ function lerpAngle(a: number, b: number, t: number) {
   while (diff > Math.PI) diff -= Math.PI * 2;
   while (diff < -Math.PI) diff += Math.PI * 2;
   return a + diff * t;
-}
-
-// Town numeric helpers
-function townCalcBaseCap(hallLevel: number) {
-  const L = Math.max(1, Math.min(10, hallLevel || 1));
-  return 1000 * (1 + 0.3 * (L - 1));
-}
-
-function townCalcResCap(hallLevel: number, warehouseLevel: number) {
-  const base = townCalcBaseCap(hallLevel);
-  const Lw = Math.max(0, Math.min(10, warehouseLevel || 0));
-  return base * (1 + 0.5 * Lw);
-}
-
-function townCalcYield(building: string, level: number) {
-  const L = Math.max(1, Math.min(10, level || 1));
-  switch (building) {
-    case 'lumber': return 5 * (1 + 0.15 * (L - 1));
-    case 'quarry': return 4 * (1 + 0.15 * (L - 1));
-    case 'mine': return 3 * (1 + 0.20 * (L - 1));
-    default: return 0;
-  }
-}
-
-const TOWN_UPGRADE_BASE_COST: Record<string, Record<string, number>> = {
-  hall: { wood: 40, stone: 60, ore: 40, gold: 80 },
-  warehouse: { wood: 30, stone: 50, ore: 10, gold: 40 },
-  lumber: { wood: 5, stone: 20, ore: 5, gold: 15 },
-  quarry: { wood: 20, stone: 5, ore: 5, gold: 15 },
-  mine: { wood: 15, stone: 15, ore: 5, gold: 20 },
-};
-
-const BUILD_QUEUE_MAX_SLOTS = 3;
-const UPGRADE_BASE_TIME_SEC = 60;
-
-/** 升级到 L+1 所需时间（秒）：BaseTime × (1+L)^1.2 */
-function upgradeDurationSec(L: number): number {
-  return Math.max(1, Math.round(UPGRADE_BASE_TIME_SEC * Math.pow(1 + L, 1.2)));
 }
 
 export type GameMode = 'town' | 'start' | 'run';
@@ -122,18 +84,7 @@ export class GameEngine {
   // Town
   townState: TownState | null = null;
   townBonus: TownBonus = { atkMult: 1, hpMult: 1, defMult: 1 };
-  private townResAccum = 0;
-  townHoverCell: { x: number; y: number } | null = null;
-  townDragBuilding: string | null = null;
-  townSelectedBuilding: string | null = null;
-  private townDragStartCell: { x: number; y: number } | null = null;
-  // Town camera & zoom
-  private townCameraX = 0;
-  private townCameraY = 0;
-  private townZoom = 3;
-  private townDragCamera = false;
-  private townLastDragX = 0;
-  private townLastDragY = 0;
+  private townController: TownController;
 
   // Cached player data
   cachedPlayerData: PlayerState | null = null;
@@ -156,6 +107,14 @@ export class GameEngine {
   constructor(callbacks: GameCallbacks) {
     this.callbacks = callbacks;
     this.network = new Network();
+    this.townController = new TownController(
+      (town, caps) => {
+        this.townState = town;
+        this.townBonus = this.townController.getTownBonus();
+        this.callbacks.onTownUpdate(town, caps);
+      },
+      (entityId) => this.callbacks.onTownSelectionChange?.(entityId),
+    );
     this.setupNetworkHandlers();
   }
 
@@ -166,24 +125,26 @@ export class GameEngine {
     this.renderer.resize();
   }
 
-  /** 城镇画布使用 PixiJS v8，需 await 完成后再 resize/render */
+  /** 鍩庨晣鐢诲竷浣跨敤 PixiJS v8锛岄渶 await 瀹屾垚鍚庡啀 resize/render */
   async initTownCanvas(canvas: HTMLCanvasElement): Promise<void> {
     if (this.townCanvas !== canvas) {
       this.townRenderer?.destroy();
       this.townCanvas = canvas;
       this.townRenderer = new TownPixiRenderer(canvas);
       await this.townRenderer.init();
-      // Don't override the auto-calculated zoom, sync from renderer instead
-      this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
+      const snapshot = this.townController.getSnapshot();
+      if (snapshot) this.townRenderer.setTownData(snapshot);
+      this.townRenderer.updateCamera(this.townController.getCameraState());
     }
     if (this.mode === 'town') this.canvas = canvas;
   }
 
   /** Sync townZoom from renderer after resize */
   syncTownZoom() {
-    if (this.townRenderer) {
-      this.townZoom = this.townRenderer.getZoom();
-    }
+    if (!this.townRenderer) return;
+    this.townController.syncZoom(this.townRenderer.getZoom());
+    const camera = this.townRenderer.getCamera();
+    this.townController.setCamera(camera.x, camera.y);
   }
 
   private setupNetworkHandlers() {
@@ -263,331 +224,53 @@ export class GameEngine {
   }
 
   // ==================== TOWN ====================
+  // ==================== TOWN ====================
 
   initTownState() {
-    try {
-      const saved = sessionStorage.getItem('sevens_town_state');
-      if (saved) {
-        this.townState = JSON.parse(saved);
-      }
-    } catch (e) {
-      console.warn('Failed to read town state:', e);
-    }
-    if (!this.townState) {
-      this.townState = {
-        resources: { wood: 0, stone: 0, ore: 0, gold: 0 },
-        buildings: { hall: 1, warehouse: 0, lumber: 1, quarry: 1, mine: 1 },
-        caps: { equipSlots: 20, materialSlots: 100 },
-        buildQueue: [null, null, null],
-      };
-    }
-    if (!this.townState.buildQueue || !Array.isArray(this.townState.buildQueue)) {
-      this.townState.buildQueue = [null, null, null];
-    }
-    while (this.townState.buildQueue.length < BUILD_QUEUE_MAX_SLOTS) {
-      this.townState.buildQueue.push(null);
-    }
-    this.townState.buildQueue = this.townState.buildQueue.slice(0, BUILD_QUEUE_MAX_SLOTS);
-
-    const buildingOrder = ['hall', 'warehouse', 'lumber', 'quarry', 'mine', 'blacksmith', 'tavern', 'alchemy'];
-    const existingTypes = buildingOrder.filter((k) => this.townState!.buildings[k] !== undefined);
-
-    if (!this.townState.buildingPositions || Object.keys(this.townState.buildingPositions).length === 0) {
-      this.townState.buildingPositions = this.generateDefaultBuildingPositions(existingTypes);
-    } else {
-      for (const type of existingTypes) {
-        if (!this.townState.buildingPositions[type]) {
-          const pos = this.findFirstFreeCellForBuilding(type);
-          if (pos) {
-            this.townState.buildingPositions[type] = pos;
-          }
-        }
-      }
-    }
-
-    this.persistTownState();
+    this.townController.initState();
+    this.townState = this.townController.getState();
+    this.townBonus = this.townController.getTownBonus();
   }
 
-  private generateDefaultBuildingPositions(types: string[]): Record<string, BuildingPosition> {
-    const out: Record<string, BuildingPosition> = {};
-    const used = new Set<string>();
-    const key = (gx: number, gy: number) => `${gx},${gy}`;
-    const canPlace = (gx: number, gy: number, w: number, h: number) => {
-      if (gx + w > TOWN_GRID_W || gy + h > TOWN_GRID_H) return false;
-      for (let dy = 0; dy < h; dy++) {
-        for (let dx = 0; dx < w; dx++) {
-          if (used.has(key(gx + dx, gy + dy))) return false;
-        }
-      }
-      return true;
-    };
-    const mark = (gx: number, gy: number, w: number, h: number) => {
-      for (let dy = 0; dy < h; dy++) {
-        for (let dx = 0; dx < w; dx++) used.add(key(gx + dx, gy + dy));
-      }
-    };
-    for (const type of types) {
-      const size = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
-      let placed = false;
-      for (let gy = 0; gy < TOWN_GRID_H && !placed; gy++) {
-        for (let gx = 0; gx < TOWN_GRID_W && !placed; gx++) {
-          if (canPlace(gx, gy, size.w, size.h)) {
-            out[type] = { x: gx, y: gy };
-            mark(gx, gy, size.w, size.h);
-            placed = true;
-          }
-        }
-      }
-    }
-    return out;
+  getSelectedTownBuilding(entityId: string | null): BuildingInstance | null {
+    const selectedId = entityId ?? this.townController.getSelectedEntityId();
+    if (!selectedId) return null;
+    return this.townController.getState()?.buildingInstances.find((instance) => instance.id === selectedId) ?? null;
   }
 
-  /** 城镇模式下将当前鼠标屏幕坐标转换为网格格子（等轴测反算 + 菱形命中） */
-  getTownMouseGrid(): { x: number; y: number } | null {
-    if (this.mode !== 'town' || !this.canvas) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    // Use CSS coordinates consistently (rect.width/height are always CSS pixels)
-    const canvasX = this.mouseX - rect.left;
-    const canvasY = this.mouseY - rect.top;
-    // Always get current zoom and camera from renderer to ensure sync
-    const currentZoom = this.townRenderer?.getZoom() ?? this.townZoom;
-    const camera = this.townRenderer?.getCamera() ?? { x: this.townCameraX, y: this.townCameraY };
-    // Must match TownPixiRenderer centering + camera transform (inverse)
-    const isoCenter = gridToScreen((TOWN_GRID_W - 1) / 2, (TOWN_GRID_H - 1) / 2);
-    let dx = canvasX - rect.width / 2;
-    let dy = canvasY - rect.height / 2;
-    dx -= camera.x;
-    dy -= camera.y;
-    dx /= currentZoom;
-    dy /= currentZoom;
-    const isoScreenX = dx + isoCenter.x;
-    const isoScreenY = dy + isoCenter.y;
-    const { gx: gxf, gy: gyf } = screenToGrid(isoScreenX, isoScreenY);
-    const i0 = Math.floor(gxf);
-    const j0 = Math.floor(gyf);
-    const candidates: [number, number][] = [
-      [i0, j0],
-      [i0 + 1, j0],
-      [i0, j0 + 1],
-      [i0 + 1, j0 + 1],
-    ];
-    for (const [gx, gy] of candidates) {
-      if (gx < 0 || gx >= TOWN_GRID_W || gy < 0 || gy >= TOWN_GRID_H) continue;
-      if (pointInDiamond(isoScreenX, isoScreenY, gx, gy)) return { x: gx, y: gy };
-    }
-    const gx = Math.round(gxf);
-    const gy = Math.round(gyf);
-    if (gx < 0 || gx >= TOWN_GRID_W || gy < 0 || gy >= TOWN_GRID_H) return null;
-    return { x: gx, y: gy };
-  }
-
-  getBuildingAtGrid(gx: number, gy: number): string | null {
-    const positions = this.townState?.buildingPositions;
-    if (!positions) return null;
-    for (const [type, pos] of Object.entries(positions)) {
-      const size = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
-      if (gx >= pos.x && gx < pos.x + size.w && gy >= pos.y && gy < pos.y + size.h) return type;
-    }
-    return null;
-  }
-
-  moveBuilding(buildingType: string, toGx: number, toGy: number): boolean {
-    if (!this.townState?.buildingPositions) return false;
-    const size = BUILDING_GRID_SIZE[buildingType] ?? { w: 1, h: 1 };
-    if (toGx < 0 || toGy < 0 || toGx + size.w > TOWN_GRID_W || toGy + size.h > TOWN_GRID_H) return false;
-    const positions = this.townState.buildingPositions;
-    for (const [type, pos] of Object.entries(positions)) {
-      if (type === buildingType) continue;
-      const sz = BUILDING_GRID_SIZE[type] ?? { w: 1, h: 1 };
-      const disjoint =
-        toGx + size.w <= pos.x || pos.x + sz.w <= toGx || toGy + size.h <= pos.y || pos.y + sz.h <= toGy;
-      if (!disjoint) return false;
-    }
-    this.townState.buildingPositions[buildingType] = { x: toGx, y: toGy };
-    this.persistTownState();
-    this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
-    return true;
+  getSelectedTownBuildingId(): string | null {
+    return this.townController.getSelectedEntityId();
   }
 
   clearTownSelection() {
-    this.townSelectedBuilding = null;
-    this.callbacks.onTownSelectionChange?.(null);
-  }
-
-  private findFirstFreeCellForBuilding(buildingType: string): BuildingPosition | null {
-    const size = BUILDING_GRID_SIZE[buildingType] ?? { w: 1, h: 1 };
-    const positions = this.townState?.buildingPositions ?? {};
-    const used = new Set<string>();
-    const key = (gx: number, gy: number) => `${gx},${gy}`;
-    for (const [t, pos] of Object.entries(positions)) {
-      const sz = BUILDING_GRID_SIZE[t] ?? { w: 1, h: 1 };
-      for (let dy = 0; dy < sz.h; dy++) {
-        for (let dx = 0; dx < sz.w; dx++) used.add(key(pos.x + dx, pos.y + dy));
-      }
-    }
-    for (let gy = 0; gy < TOWN_GRID_H; gy++) {
-      for (let gx = 0; gx < TOWN_GRID_W; gx++) {
-        if (gx + size.w > TOWN_GRID_W || gy + size.h > TOWN_GRID_H) continue;
-        let ok = true;
-        for (let dy = 0; dy < size.h && ok; dy++) {
-          for (let dx = 0; dx < size.w && ok; dx++) {
-            if (used.has(key(gx + dx, gy + dy))) ok = false;
-          }
-        }
-        if (ok) return { x: gx, y: gy };
-      }
-    }
-    return null;
-  }
-
-  persistTownState() {
-    if (!this.townState) return;
-    try {
-      sessionStorage.setItem('sevens_town_state', JSON.stringify(this.townState));
-    } catch (e) {}
+    this.townController.clearSelection();
   }
 
   getResourceCaps() {
-    if (!this.townState) return { wood: 0, stone: 0, ore: 0 };
-    const b = this.townState.buildings;
-    const cap = Math.round(townCalcResCap(b.hall, b.warehouse));
-    return { wood: cap, stone: cap, ore: cap };
+    return this.townController.getResourceCaps();
   }
 
-  /** 返回指定建筑下一级升级所需资源（与 upgradeBuilding 内计算一致） */
-  getUpgradeCost(buildingType: string): { wood: number; stone: number; ore: number; gold: number } {
-    const base = TOWN_UPGRADE_BASE_COST[buildingType];
-    if (!base) return { wood: 0, stone: 0, ore: 0, gold: 0 };
-    const current = this.townState?.buildings[buildingType] ?? 0;
-    if (current >= 10) return { wood: 0, stone: 0, ore: 0, gold: 0 };
-    const L = Math.max(0, Math.min(9, current));
-    const mult = (1 + L) * (1 + L);
-    return {
-      wood: Math.round(base.wood * mult),
-      stone: Math.round(base.stone * mult),
-      ore: Math.round(base.ore * mult),
-      gold: Math.round(base.gold * mult),
-    };
+  getUpgradeCost(buildingId: string): { wood: number; stone: number; ore: number; gold: number } {
+    return this.townController.getUpgradeCost(buildingId);
   }
 
-  /** 根据市政厅等级返回已解锁的建造队列槽位数（1/2/3） */
-  getBuildQueueSlotsUnlocked(): number {
-    if (!this.townState) return 1;
-    const hall = this.townState.buildings.hall ?? 1;
-    if (hall >= 6) return 3;
-    if (hall >= 3) return 2;
-    return 1;
+  isBuildingInQueue(buildingId: string): boolean {
+    return this.townController.isBuildingInQueue(buildingId);
   }
 
-  /** 检查某建筑是否已在队列中 */
-  isBuildingInQueue(type: string): boolean {
-    if (!this.townState?.buildQueue) return false;
-    return this.townState.buildQueue.some((s) => s !== null && s.buildingType === type);
-  }
-
-  /** 是否有空位可加入新升级任务 */
   hasEmptyBuildQueueSlot(): boolean {
-    const unlocked = this.getBuildQueueSlotsUnlocked();
-    const q = this.townState?.buildQueue ?? [];
-    for (let i = 0; i < unlocked && i < q.length; i++) {
-      if (q[i] === null) return true;
-    }
-    return false;
+    return this.townController.hasEmptyBuildQueueSlot();
   }
 
-  upgradeBuilding(type: string) {
-    if (!this.townState) return;
-    const b = this.townState.buildings;
-    const current = b[type] ?? 0;
-    if (current >= 10) return;
-    if (type !== 'hall' && current >= b.hall) return;
-    if (this.isBuildingInQueue(type)) return;
-    if (!this.hasEmptyBuildQueueSlot()) return;
-
-    const base = TOWN_UPGRADE_BASE_COST[type];
-    if (!base) return;
-    const L = Math.max(0, Math.min(9, current));
-    const mult = (1 + L) * (1 + L);
-    const cost = {
-      wood: Math.round(base.wood * mult),
-      stone: Math.round(base.stone * mult),
-      ore: Math.round(base.ore * mult),
-      gold: Math.round(base.gold * mult),
-    };
-
-    const r = this.townState.resources;
-    if (r.wood < cost.wood || r.stone < cost.stone || r.ore < cost.ore || r.gold < cost.gold) return;
-
-    r.wood -= cost.wood;
-    r.stone -= cost.stone;
-    r.ore -= cost.ore;
-    r.gold -= cost.gold;
-
-    const durationSec = upgradeDurationSec(L);
-    const completesAt = Math.floor(Date.now() / 1000) + durationSec;
-    const item: BuildQueueItem = { buildingType: type, fromLevel: current, completesAt };
-    const q = this.townState.buildQueue;
-    for (let i = 0; i < this.getBuildQueueSlotsUnlocked() && i < q.length; i++) {
-      if (q[i] === null) {
-        q[i] = item;
-        break;
-      }
-    }
-    this.persistTownState();
-    this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
-  }
-
-  /** 每帧检查建造队列，到期的升级立即完成（任意模式均推进时间） */
-  private processBuildQueue() {
-    if (!this.townState?.buildQueue) return;
-    const nowSec = Math.floor(Date.now() / 1000);
-    const b = this.townState.buildings;
-    const q = this.townState.buildQueue;
-    let changed = false;
-    for (let i = 0; i < q.length; i++) {
-      const item = q[i];
-      if (item && item.completesAt <= nowSec) {
-        const prev = b[item.buildingType] ?? 0;
-        if (prev === item.fromLevel) {
-          b[item.buildingType] = item.fromLevel + 1;
-          q[i] = null;
-          changed = true;
-        }
-      }
-    }
-    if (changed) {
-      this.persistTownState();
-      this.computeTownBonus();
-      this.callbacks.onTownUpdate(this.townState, this.getResourceCaps());
-    }
+  upgradeBuilding(buildingId: string) {
+    this.townController.upgradeBuilding(buildingId);
+    this.townState = this.townController.getState();
+    this.townBonus = this.townController.getTownBonus();
   }
 
   computeTownBonus() {
-    if (!this.townState) {
-      this.townBonus = { atkMult: 1, hpMult: 1, defMult: 1 };
-      return;
-    }
-    const b = this.townState.buildings;
-    this.townBonus = {
-      atkMult: 1 + 0.02 * (b.blacksmith || 0),
-      hpMult: 1 + 0.01 * ((b.hall || 1) - 1) + 0.005 * (b.warehouse || 0),
-      defMult: 1 + 0.01 * ((b.warehouse || 0) + (b.hall || 1) - 1),
-    };
+    this.townBonus = this.townController.getTownBonus();
   }
-
-  private applyResourceTicks(ticks: number) {
-    if (!this.townState || ticks <= 0) return;
-    const b = this.townState.buildings;
-    const caps = this.getResourceCaps();
-    const r = this.townState.resources;
-    r.wood = Math.min(caps.wood, r.wood + townCalcYield('lumber', b.lumber) * ticks);
-    r.stone = Math.min(caps.stone, r.stone + townCalcYield('quarry', b.quarry) * ticks);
-    r.ore = Math.min(caps.ore, r.ore + townCalcYield('mine', b.mine) * ticks);
-    this.persistTownState();
-    this.callbacks.onTownUpdate(this.townState, caps);
-  }
-
-  // ==================== ACTIONS ====================
 
   selectHero(hero: string) {
     this.mode = 'run';
@@ -598,7 +281,7 @@ export class GameEngine {
 
     const tryJoin = () => {
       if (this.network.connected) {
-        this.network.sendJoin(hero, '勇士' + Math.floor(Math.random() * 999));
+        this.network.sendJoin(hero, '鍕囧＋' + Math.floor(Math.random() * 999));
       } else {
         setTimeout(tryJoin, 100);
       }
@@ -678,55 +361,18 @@ export class GameEngine {
   }
 
   handleWheel(e: WheelEvent) {
-    if (this.mode !== 'town') return;
-    if (!this.canvas || !this.townRenderer) return;
+    if (this.mode !== 'town' || !this.canvas || !this.townRenderer) return;
     e.preventDefault();
-    const rect = this.canvas.getBoundingClientRect();
-    const scaleX = rect.width > 0 ? this.canvas.width / rect.width : 1;
-    const scaleY = rect.height > 0 ? this.canvas.height / rect.height : 1;
-    const canvasX = (e.clientX - rect.left) * scaleX;
-    const canvasY = (e.clientY - rect.top) * scaleY;
-
-    const before = this.getTownMouseGrid();
-
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    this.townZoom = Math.max(0.5, Math.min(3.5, this.townZoom * factor));
-    this.townRenderer.setZoom(this.townZoom);
-
-    if (before) {
-      // After zoom, adjust camera so the grid cell under the mouse stays approximately fixed
-      const after = this.getTownMouseGrid();
-      if (after) {
-        const dxGrid = before.x - after.x;
-        const dyGrid = before.y - after.y;
-        if (dxGrid !== 0 || dyGrid !== 0) {
-          const isoBefore = gridToScreen(before.x, before.y);
-          const isoAfter = gridToScreen(after.x, after.y);
-          const dx = (isoBefore.x - isoAfter.x) * this.townZoom;
-          const dy = (isoBefore.y - isoAfter.y) * this.townZoom;
-          this.townCameraX += dx;
-          this.townCameraY += dy;
-          this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
-        }
-      }
-    }
+    this.townController.handleWheel(this.canvas, e.clientX, e.clientY, e.deltaY);
+    this.townRenderer.updateCamera(this.townController.getCameraState());
   }
 
   handleMouseMove(e: MouseEvent) {
     this.mouseX = e.clientX;
     this.mouseY = e.clientY;
     if (this.mode === 'town') {
-      if (this.townDragCamera && this.townRenderer) {
-        const dx = e.clientX - this.townLastDragX;
-        const dy = e.clientY - this.townLastDragY;
-        this.townLastDragX = e.clientX;
-        this.townLastDragY = e.clientY;
-        this.townCameraX += dx;
-        this.townCameraY += dy;
-        this.townRenderer.setCamera(this.townCameraX, this.townCameraY);
-      } else {
-        this.townHoverCell = this.getTownMouseGrid();
-      }
+      if (this.canvas) this.townController.handleMouseMove(this.canvas, e.clientX, e.clientY);
+      this.townRenderer?.updateCamera(this.townController.getCameraState());
     } else if (this.mainCanvas && this.renderer) {
       this.mouseWorldX = this.mouseX - this.mainCanvas.width / 2 + this.renderer.camera.x;
       this.mouseWorldY = this.mouseY - this.mainCanvas.height / 2 + this.renderer.camera.y;
@@ -736,22 +382,7 @@ export class GameEngine {
   handleMouseDown(e: MouseEvent) {
     if ((e.target as HTMLElement).closest?.('#inventory-panel, #stats-panel, #item-detail, #start-screen, .ui-panel')) return;
     if (e.button === 0 && this.mode === 'town') {
-      if (e.shiftKey) {
-        this.townDragCamera = true;
-        this.townLastDragX = e.clientX;
-        this.townLastDragY = e.clientY;
-        return;
-      }
-      const cell = this.getTownMouseGrid();
-      if (cell) {
-        const building = this.getBuildingAtGrid(cell.x, cell.y);
-        if (building) {
-          this.townDragBuilding = building;
-          this.townDragStartCell = { x: cell.x, y: cell.y };
-          this.townSelectedBuilding = building;
-          this.callbacks.onTownSelectionChange?.(building);
-        }
-      }
+      if (this.canvas) this.townController.handleMouseDown(this.canvas, e.clientX, e.clientY, e.shiftKey);
       return;
     }
     if (!this.gameStarted || !this.localPlayerID) return;
@@ -762,24 +393,13 @@ export class GameEngine {
   }
 
   handleMouseUp(e: MouseEvent) {
-    if (e.button === 0 && this.mode === 'town') {
-      if (this.townDragCamera) {
-        this.townDragCamera = false;
-        return;
-      }
-      if (this.townDragBuilding) {
-      const cell = this.getTownMouseGrid();
-      const start = this.townDragStartCell;
-      if (cell && start && (cell.x !== start.x || cell.y !== start.y)) {
-        this.moveBuilding(this.townDragBuilding, cell.x, cell.y);
-      }
-      this.townDragBuilding = null;
-      this.townDragStartCell = null;
-        return;
-      }
+    if (e.button === 0 && this.mode === 'town' && this.canvas) {
+      this.townController.handleMouseUp(this.canvas, e.clientX, e.clientY);
+      return;
     }
   }
 
+  // ==================== GAME LOOP ====================
   // ==================== GAME LOOP ====================
 
   private buildRenderState(now: number): GameState | null {
@@ -833,17 +453,10 @@ export class GameEngine {
       const dt = Math.min(0.05, (now - this.lastTime) / 1000);
       this.lastTime = now;
 
-      // Town: 资源产出（仅城镇界面时推进）与建造队列完成（任意模式均推进，支持离线完成）
       if (this.townState) {
-        this.processBuildQueue();
-        if (this.mode === 'town') {
-          this.townResAccum += dt;
-          if (this.townResAccum >= 10) {
-            const ticks = Math.floor(this.townResAccum / 10);
-            this.townResAccum -= ticks * 10;
-            this.applyResourceTicks(ticks);
-          }
-        }
+        this.townController.process(dt, this.mode === 'town');
+        this.townState = this.townController.getState();
+        this.townBonus = this.townController.getTownBonus();
       }
 
       if (this.gameStarted) {
@@ -885,19 +498,13 @@ export class GameEngine {
       }
 
       if (this.mode === 'town' && this.townState) {
-        const townScene: TownPixiScene = {
-          townState: this.townState,
-          buildingGridSize: BUILDING_GRID_SIZE,
-          townHoverCell: this.townHoverCell,
-          townDragBuilding: this.townDragBuilding,
-          townSelectedBuilding: this.townSelectedBuilding,
-        };
-        if (this.townRenderer && this.townCanvas) {
+        const snapshot = this.townController.getSnapshot();
+        if (snapshot && this.townRenderer && this.townCanvas) {
           this.canvas = this.townCanvas;
-          this.townRenderer.render(townScene);
-        } else {
-          // fallback (legacy) if town pixi canvas not initialized
-          this.renderer?.render(null, this.localPlayerID, this.mouseWorldX, this.mouseWorldY, dt, this.moveTargetIndicator, townScene);
+          this.townRenderer.updateCamera(this.townController.getCameraState());
+          this.townRenderer.render(snapshot);
+        } else if (snapshot) {
+          this.renderer?.render(null, this.localPlayerID, this.mouseWorldX, this.mouseWorldY, dt, this.moveTargetIndicator, snapshot);
         }
       } else {
         const renderState = this.buildRenderState(now);

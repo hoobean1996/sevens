@@ -92,8 +92,8 @@ class Renderer {
     }
 
     _renderTown(ctx, W, H, townScene) {
-        const { townState, buildingGridSize, townHoverCell, townDragBuilding, townSelectedBuilding } = townScene;
-        const positions = townState.buildingPositions || {};
+        const { townState, townHoverCell, previewPlacement, selectedEntityId } = townScene;
+        const instances = townState.buildingInstances || [];
         const centerGx = (TOWN_GRID_W - 1) / 2;
         const centerGy = (TOWN_GRID_H - 1) / 2;
         const isoCenter = gridToScreen(centerGx, centerGy);
@@ -129,11 +129,11 @@ class Renderer {
         if (townHoverCell) {
             items.push({ gx: townHoverCell.x, gy: townHoverCell.y, kind: 'hover' });
         }
-        if (townDragBuilding && townHoverCell) {
-            items.push({ gx: townHoverCell.x, gy: townHoverCell.y, kind: 'preview', type: townDragBuilding });
+        if (previewPlacement) {
+            items.push({ gx: previewPlacement.gx, gy: previewPlacement.gy, kind: 'preview', type: previewPlacement.type });
         }
-        for (const [type, pos] of Object.entries(positions)) {
-            items.push({ gx: pos.x, gy: pos.y, kind: 'building', type, pos });
+        for (const instance of instances) {
+            items.push({ gx: instance.gx, gy: instance.gy, kind: 'building', type: instance.type, instance });
         }
         items.sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy));
 
@@ -156,8 +156,8 @@ class Renderer {
                 ctx.stroke();
                 ctx.globalAlpha = 1;
             } else {
-                const size = buildingGridSize[it.type] || { w: 1, h: 1 };
-                const isSelected = it.type === townSelectedBuilding;
+                const size = BUILDING_GRID_SIZE[it.type] || { w: 1, h: 1 };
+                const isSelected = it.instance?.id === selectedEntityId;
                 ctx.fillStyle = buildingColors[it.type] || '#444';
                 this._drawDiamond(ctx, p.x, p.y, 1.15);
                 ctx.fill();
@@ -168,7 +168,7 @@ class Renderer {
                 ctx.font = '11px sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                const level = townState.buildings[it.type] ?? 0;
+                const level = it.instance?.level ?? townState.buildings[it.type] ?? 0;
                 const label = (BUILDING_NAMES[it.type] || it.type) + ' Lv.' + level;
                 ctx.fillText(label, p.x, p.y);
             }

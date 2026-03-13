@@ -122,18 +122,16 @@ export interface GameState {
   effects: EffectState[];
   drops: GroundDrop[];
   damage_nums: DamageNumber[];
-  // Arena mode fields
   arena_mode?: boolean;
   shop_phase?: boolean;
   shop_timer?: number;
   shops?: ShopState[];
 }
 
-// Shop types for arena mode
 export interface ShopState {
   id: string;
   name: string;
-  type: string; // weapon, armor, potion, upgrade
+  type: string;
   x: number;
   y: number;
   items: ShopItem[];
@@ -145,9 +143,8 @@ export interface ShopItem {
   description: string;
   price: number;
   rarity: string;
-  item_type: string; // equipment, potion, upgrade
+  item_type: string;
   slot?: string;
-  // Stats for equipment
   atk?: number;
   def?: number;
   atk_speed?: number;
@@ -155,10 +152,8 @@ export interface ShopItem {
   crit_dmg?: number;
   life_steal?: number;
   hp_regen?: number;
-  // Potion effects
   heal_hp?: number;
   heal_mp?: number;
-  // Upgrade effects
   max_hp_bonus?: number;
   atk_bonus?: number;
 }
@@ -184,29 +179,56 @@ export interface PickupMessage {
   slot: string;
 }
 
-/** 建造队列单格：某建筑的升级任务，completesAt 为 Unix 时间戳（秒） */
 export interface BuildQueueItem {
+  buildingId: string;
   buildingType: string;
   fromLevel: number;
   completesAt: number;
 }
 
-/** 建筑在城镇网格上的格子坐标（非像素） */
 export interface BuildingPosition {
   x: number;
   y: number;
+}
+
+export interface TownTileLayer {
+  id: string;
+  width: number;
+  height: number;
+  tiles: string[];
+  chunkSize?: number;
+}
+
+export interface TownMapData {
+  version: number;
+  width: number;
+  height: number;
+  layers: {
+    ground: TownTileLayer;
+    overlay: TownTileLayer;
+    objects: TownTileLayer;
+  };
+}
+
+export interface BuildingInstance {
+  id: string;
+  type: string;
+  gx: number;
+  gy: number;
+  level: number;
+  rotation: number;
+  variant: string;
 }
 
 export interface TownState {
   resources: { wood: number; stone: number; ore: number; gold: number };
   buildings: Record<string, number>;
   caps: { equipSlots: number; materialSlots: number };
-  /** 建造队列，长度 3；null 表示空位，未解锁的槽位也为 null */
   buildQueue: (BuildQueueItem | null)[];
-  /** 建筑在网格上的位置，键与 buildings 一致 */
+  map: TownMapData;
+  buildingInstances: BuildingInstance[];
   buildingPositions?: Record<string, BuildingPosition>;
 }
-
 
 export interface TownBonus {
   atkMult: number;
@@ -214,10 +236,9 @@ export interface TownBonus {
   defMult: number;
 }
 
-export const RARITY_NAMES = ['普通', '优秀', '稀有', '史诗', '传说'];
+export const RARITY_NAMES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
 export const RARITY_COLORS = ['#cccccc', '#44ff44', '#4488ff', '#bb44ff', '#ff8800'];
 
-// String rarity to color mapping (for shop items)
 export const RARITY_STRING_COLORS: Record<string, string> = {
   common: '#cccccc',
   uncommon: '#44ff44',
@@ -227,16 +248,26 @@ export const RARITY_STRING_COLORS: Record<string, string> = {
 };
 
 export const SHOP_ICONS: Record<string, string> = {
-  weapon: '⚔️',
-  armor: '🛡️',
-  potion: '🧪',
-  upgrade: '🔨',
+  weapon: 'W',
+  armor: 'A',
+  potion: 'P',
+  upgrade: 'U',
 };
+
 export const SLOT_NAMES: Record<string, string> = {
-  weapon: '武器', armor: '铠甲', helmet: '头盔',
-  boots: '战靴', ring: '戒指', amulet: '项链',
+  weapon: 'Weapon',
+  armor: 'Armor',
+  helmet: 'Helmet',
+  boots: 'Boots',
+  ring: 'Ring',
+  amulet: 'Amulet',
 };
+
 export const SLOT_ICONS: Record<string, string> = {
-  weapon: '⚔', armor: '🛡', helmet: '⛑',
-  boots: '👢', ring: '💍', amulet: '📿',
+  weapon: 'W',
+  armor: 'A',
+  helmet: 'H',
+  boots: 'B',
+  ring: 'R',
+  amulet: 'M',
 };

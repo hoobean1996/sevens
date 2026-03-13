@@ -1,82 +1,61 @@
 import * as PIXI from 'pixi.js';
-import { BUILDING_NAMES, gridToScreen, ISO_TILE_H, ISO_TILE_W, TOWN_GRID_H, TOWN_GRID_W } from './townConfig';
-
-export type TownPixiScene = {
-  townState: any;
-  buildingGridSize: Record<string, { w: number; h: number }>;
-  townHoverCell: { x: number; y: number } | null;
-  townDragBuilding: string | null;
-  townSelectedBuilding: string | null;
-};
-
-const BUILDING_SPRITE_URL: Record<string, string> = {
-  hall: '/assets/town/buildings/hall.png',
-  warehouse: '/assets/town/buildings/warehouse.png',
-  lumber: '/assets/town/buildings/lumber.png',
-  quarry: '/assets/town/buildings/quarry.png',
-  mine: '/assets/town/buildings/mine.png',
-  blacksmith: '/assets/town/buildings/blacksmith.png',
-  tavern: '/assets/town/buildings/tavern.png',
-  alchemy: '/assets/town/buildings/alchemy.png',
-};
-
-const FLOOR_SPRITE_URL: Record<string, string> = {
-  turf: '/assets/town/floor/turf.png',
-  leftRoad: '/assets/town/floor/left-road.png',
-  rightRoad: '/assets/town/floor/right-road.png',
-  bottomLeftCorner: '/assets/town/floor/bottom-left-corner.png',
-  bottomRightCorner: '/assets/town/floor/bottom-right-corner.png',
-  topLeftCorner: '/assets/town/floor/top-left-corner.png',
-  topRightCorner: '/assets/town/floor/top-right-corner.png',
-};
+import { ISO_TILE_H, ISO_TILE_W, gridToScreen } from './townConfig';
+import { ensureTownAssetsReady, getTownTexture } from './townAssets';
+import { getBuildingDef } from './townDefinitions';
+import { BuildingInstance, TownMapData } from './types';
+import { TownSnapshot } from './TownController';
 
 function diamondPolygon(cx: number, cy: number, scale = 1) {
   const w = (ISO_TILE_W / 2) * scale;
   const h = (ISO_TILE_H / 2) * scale;
-  return [
-    cx - w, cy,
-    cx, cy - h,
-    cx + w, cy,
-    cx, cy + h,
-  ];
+  return [cx - w, cy, cx, cy - h, cx + w, cy, cx, cy + h];
 }
 
-function footprintScreenWidth(w: number, h: number) {
-  // Bounding diamond width of a w*h rectangle in isometric projection
+function footprintWidth(w: number, h: number) {
   return (w + h) * (ISO_TILE_W / 2);
 }
+
+type BuildingNode = {
+  container: PIXI.Container;
+  sprite: PIXI.Sprite | PIXI.Graphics;
+  label: PIXI.Text;
+  outline: PIXI.Graphics;
+  signature: string;
+  sortValue: number;
+};
 
 export class TownPixiRenderer {
   private view: HTMLCanvasElement;
   private app: PIXI.Application | null = null;
   private root: PIXI.Container | null = null;
-  private ground: PIXI.Graphics | null = null;
-  private groundTiles: PIXI.Container | null = null;
+  private groundBase: PIXI.Graphics | null = null;
+  private groundLayer: PIXI.Container | null = null;
+  private overlayLayer: PIXI.Container | null = null;
+  private buildingLayer: PIXI.Container | null = null;
   private hoverGfx: PIXI.Graphics | null = null;
   private previewGfx: PIXI.Graphics | null = null;
-  private buildingLayer: PIXI.Container | null = null;
-  private buildingSprites: Map<string, PIXI.Container> = new Map();
-  private textures: Map<string, PIXI.Texture> = new Map();
-  private floorTextures: Map<string, PIXI.Texture> = new Map();
-  private startedLoading = false;
-  private initDone = false;
-
-  // Camera state for town map
-  private cameraX = 0;
-  private cameraY = 0;
-  private zoom = 1;
-  private initialZoomSet = false;
-  // Store CSS dimensions for coordinate calculations
+  private buildingNodes = new Map<string, BuildingNode>();
   private cssWidth = 0;
   private cssHeight = 0;
+  private zoom = 1;
+  private cameraX = 0;
+  private cameraY = 0;
+  private initialZoomSet = false;
+  private assetsReady = false;
+  private snapshot: TownSnapshot | null = null;
+  private lastMapVersion = -1;
+  private lastObjectsVersion = -1;
+  private lastSelectionId: string | null = null;
+  private lastHoverKey = '';
+  private lastPreviewKey = '';
+  private sortDirty = false;
 
   constructor(view: HTMLCanvasElement) {
     this.view = view;
   }
 
-  /** PixiJS v8: 必须 await init() 后再调用 resize/render */
   async init(): Promise<void> {
-    if (this.initDone) return;
+    if (this.app) return;
     const app = new PIXI.Application();
     await app.init({
       canvas: this.view,
@@ -88,25 +67,19 @@ export class TownPixiRenderer {
     });
     this.app = app;
 
-    const root = new PIXI.Container();
-    this.app.stage.addChild(root);
-    this.root = root;
-
-    this.ground = new PIXI.Graphics();
-    this.groundTiles = new PIXI.Container();
+    this.root = new PIXI.Container();
+    this.groundBase = new PIXI.Graphics();
+    this.groundLayer = new PIXI.Container();
+    this.overlayLayer = new PIXI.Container();
+    this.buildingLayer = new PIXI.Container();
     this.hoverGfx = new PIXI.Graphics();
     this.previewGfx = new PIXI.Graphics();
-    this.buildingLayer = new PIXI.Container();
-    root.addChild(this.ground);
-    root.addChild(this.groundTiles);
-    root.addChild(this.hoverGfx);
-    root.addChild(this.previewGfx);
-    root.addChild(this.buildingLayer);
 
-    this.drawGround();
-    this.applyCameraTransform();
-    this.initDone = true;
-    void this.ensureTexturesLoaded(); // 尽早开始加载，首帧可能就能用上
+    this.root.addChild(this.groundBase, this.groundLayer, this.overlayLayer, this.buildingLayer, this.hoverGfx, this.previewGfx);
+    this.app.stage.addChild(this.root);
+
+    await ensureTownAssetsReady();
+    this.assetsReady = true;
   }
 
   destroy() {
@@ -114,305 +87,259 @@ export class TownPixiRenderer {
     this.app.destroy(true, { children: true, texture: false });
     this.app = null;
     this.root = null;
-    this.ground = null;
-    this.groundTiles = null;
+    this.groundBase = null;
+    this.groundLayer = null;
+    this.overlayLayer = null;
+    this.buildingLayer = null;
     this.hoverGfx = null;
     this.previewGfx = null;
-    this.buildingLayer = null;
-    this.buildingSprites.clear();
+    this.buildingNodes.clear();
   }
 
-  resize(w: number, h: number) {
+  resize(width: number, height: number) {
     if (!this.app?.renderer) return;
-    this.app.renderer.resize(w, h);
-    // Store CSS dimensions
-    this.cssWidth = w;
-    this.cssHeight = h;
-    if (!this.root) return;
-
-    // Calculate initial zoom to fit entire map on first resize
-    if (!this.initialZoomSet && w > 0 && h > 0) {
-      const mapW = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_W / 2);
-      const mapH = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_H / 2);
-      const zoomX = w / mapW * 0.85;
-      const zoomY = h / mapH * 0.85;
-      this.zoom = Math.min(zoomX, zoomY);
-      this.zoom = Math.max(0.5, Math.min(3.5, this.zoom));
+    this.app.renderer.resize(width, height);
+    this.cssWidth = width;
+    this.cssHeight = height;
+    if (this.snapshot?.townState.map && !this.initialZoomSet && width > 0 && height > 0) {
+      const mapW = (this.snapshot.townState.map.width + this.snapshot.townState.map.height) * (ISO_TILE_W / 2);
+      const mapH = (this.snapshot.townState.map.width + this.snapshot.townState.map.height) * (ISO_TILE_H / 2);
+      this.zoom = Math.max(0.5, Math.min(3.5, Math.min(width / mapW, height / mapH) * 0.85));
       this.initialZoomSet = true;
     }
-
     this.applyCameraTransform();
   }
 
-  getZoom(): number {
+  getZoom() {
     return this.zoom;
   }
 
-  getCamera(): { x: number; y: number } {
+  getCamera() {
     return { x: this.cameraX, y: this.cameraY };
   }
 
-  getDimensions(): { width: number; height: number } {
-    return { width: this.cssWidth, height: this.cssHeight };
+  updateCamera(camera: { x: number; y: number; zoom: number }) {
+    this.cameraX = camera.x;
+    this.cameraY = camera.y;
+    this.zoom = camera.zoom;
+    this.applyCameraTransform();
+  }
+
+  setTownData(snapshot: TownSnapshot) {
+    this.snapshot = snapshot;
+    if (snapshot.versions.map !== this.lastMapVersion) {
+      this.rebuildGround(snapshot.townState.map);
+      this.lastMapVersion = snapshot.versions.map;
+    }
+    if (snapshot.versions.objects !== this.lastObjectsVersion) {
+      this.syncBuildings(snapshot.townState.buildingInstances);
+      this.lastObjectsVersion = snapshot.versions.objects;
+    }
+    this.updateSelection(snapshot.selectedEntityId);
+    this.updateHover(snapshot.townHoverCell);
+    this.updatePreview(snapshot.previewPlacement);
+  }
+
+  selectEntity(entityId: string | null) {
+    this.updateSelection(entityId);
+  }
+
+  previewPlacement(preview: { type: string; gx: number; gy: number } | null) {
+    this.updatePreview(preview);
+  }
+
+  render(snapshot?: TownSnapshot) {
+    if (!this.app?.renderer || !this.root) return;
+    if (snapshot) this.setTownData(snapshot);
+    if (this.sortDirty) this.sortBuildings();
+    this.app.renderer.render(this.app.stage);
   }
 
   private applyCameraTransform() {
-    if (!this.root || !this.app?.renderer) return;
-    // Use CSS dimensions - get from canvas bounding rect as fallback
+    if (!this.root || !this.snapshot) return;
     const rect = this.view.getBoundingClientRect();
-    const w = this.cssWidth || rect.width || 1;
-    const h = this.cssHeight || rect.height || 1;
-    const centerGx = (TOWN_GRID_W - 1) / 2;
-    const centerGy = (TOWN_GRID_H - 1) / 2;
-    const isoCenter = gridToScreen(centerGx, centerGy);
-
+    const width = this.cssWidth || rect.width || 1;
+    const height = this.cssHeight || rect.height || 1;
+    const map = this.snapshot.townState.map;
+    const isoCenter = gridToScreen((map.width - 1) / 2, (map.height - 1) / 2);
     this.root.scale.set(this.zoom);
-    this.root.position.set(
-      w / 2 - isoCenter.x * this.zoom + this.cameraX,
-      h / 2 - isoCenter.y * this.zoom + this.cameraY,
-    );
+    this.root.position.set(width / 2 - isoCenter.x * this.zoom + this.cameraX, height / 2 - isoCenter.y * this.zoom + this.cameraY);
   }
 
-  setCamera(x: number, y: number) {
-    this.cameraX = x;
-    this.cameraY = y;
-    this.applyCameraTransform();
-  }
+  private rebuildGround(map: TownMapData) {
+    if (!this.groundBase || !this.groundLayer || !this.overlayLayer) return;
+    this.groundBase.clear();
+    const totalW = (map.width + map.height) * (ISO_TILE_W / 2);
+    const totalH = (map.width + map.height) * (ISO_TILE_H / 2);
+    this.groundBase.beginFill(0x080910, 1);
+    this.groundBase.drawRect(-totalW, -totalH, totalW * 2, totalH * 2);
+    this.groundBase.endFill();
 
-  setZoom(zoom: number) {
-    const clamped = Math.max(0.5, Math.min(3.5, zoom));
-    this.zoom = clamped;
-    this.applyCameraTransform();
-  }
+    this.groundLayer.removeChildren();
+    this.overlayLayer.removeChildren();
 
-  private async ensureTexturesLoaded() {
-    if (this.startedLoading) return;
-    this.startedLoading = true;
-
-    const buildingEntries = Object.entries(BUILDING_SPRITE_URL);
-    const floorEntries = Object.entries(FLOOR_SPRITE_URL);
-
-    await Promise.all(buildingEntries.map(async ([type, url]) => {
-      try {
-        const tex = await PIXI.Assets.load(url);
-        if (tex) this.textures.set(type, tex as PIXI.Texture);
-      } catch {
-        // missing asset: silently fallback to placeholder graphics
-      }
-    }));
-
-    await Promise.all(floorEntries.map(async ([type, url]) => {
-      try {
-        const tex = await PIXI.Assets.load(url);
-        if (tex) this.floorTextures.set(type, tex as PIXI.Texture);
-      } catch {
-        // missing asset: silently fallback to checkerboard graphics
-      }
-    }));
-
-    // After floor textures are ready, redraw ground so纹理真正生效
-    if (this.floorTextures.size > 0) {
-      this.drawGround();
-    }
-  }
-
-  private drawGround() {
-    if (!this.ground) return;
-    this.ground.clear();
-    // subtle dark base, so gaps between tiles不会太突兀
-    this.ground.beginFill(0x080910, 1);
-    const totalW = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_W / 2);
-    const totalH = (TOWN_GRID_W + TOWN_GRID_H) * (ISO_TILE_H / 2);
-    this.ground.drawRect(-totalW, -totalH, totalW * 2, totalH * 2);
-    this.ground.endFill();
-
-    if (!this.groundTiles) return;
-    this.groundTiles.removeChildren();
-
-    const getFloorKey = (gx: number, gy: number): string => {
-      const maxX = TOWN_GRID_W - 1;
-      const maxY = TOWN_GRID_H - 1;
-      // corners
-      if (gx === 0 && gy === 0) return 'topLeftCorner';
-      if (gx === maxX && gy === 0) return 'topRightCorner';
-      if (gx === 0 && gy === maxY) return 'bottomLeftCorner';
-      if (gx === maxX && gy === maxY) return 'bottomRightCorner';
-      // borders (excluding corners):
-      // 左边和右边（不含角） → left-road
-      if ((gx === 0 && gy > 0 && gy < maxY) || (gx === maxX && gy > 0 && gy < maxY)) {
-        return 'leftRoad';
-      }
-      // 上边和下边（不含角） → right-road
-      if ((gy === 0 && gx > 0 && gx < maxX) || (gy === maxY && gx > 0 && gx < maxX)) {
-        return 'rightRoad';
-      }
-      // inner tiles
-      return 'turf';
-    };
-
-    for (let gy = 0; gy < TOWN_GRID_H; gy++) {
-      for (let gx = 0; gx < TOWN_GRID_W; gx++) {
-        const key = getFloorKey(gx, gy);
+    const { ground, overlay } = map.layers;
+    for (let gy = 0; gy < map.height; gy++) {
+      for (let gx = 0; gx < map.width; gx++) {
         const p = gridToScreen(gx, gy);
-        const tex = this.floorTextures.get(key);
-        if (tex) {
-          const s = new PIXI.Sprite(tex);
-          s.anchor.set(0.5, 0.5);
-          s.position.set(p.x, p.y);
-          this.groundTiles.addChild(s);
-        } else {
-          // fallback: simple checker diamond
-          const fill = (gx + gy) % 2 === 0 ? 0x14161e : 0x1a1c26;
-          const g = new PIXI.Graphics();
-          g.poly(diamondPolygon(0, 0, 1)).fill({ color: fill, alpha: 1 });
-          g.position.set(p.x, p.y);
-          this.groundTiles.addChild(g);
+        this.groundLayer.addChild(this.createTileSprite(ground.tiles[gy * ground.width + gx], p.x, p.y));
+        const overlayKey = overlay.tiles[gy * overlay.width + gx];
+        if (overlayKey && overlayKey !== 'empty') {
+          this.overlayLayer.addChild(this.createTileSprite(overlayKey, p.x, p.y));
         }
       }
     }
+    this.applyCameraTransform();
   }
 
-  private upsertBuilding(type: string): PIXI.Container {
-    const tex = this.textures.get(type);
-    let c = this.buildingSprites.get(type);
+  private createTileSprite(textureKey: string, x: number, y: number) {
+    const texture = this.assetsReady ? getTownTexture(textureKey) : null;
+    if (texture) {
+      const sprite = new PIXI.Sprite(texture);
+      sprite.anchor.set(0.5, 0.5);
+      sprite.position.set(x, y);
+      return sprite;
+    }
+    const fallback = new PIXI.Graphics();
+    fallback.poly(diamondPolygon(0, 0)).fill({ color: 0x1a1c26, alpha: 1 });
+    fallback.position.set(x, y);
+    return fallback;
+  }
 
-    if (c) {
-      // 贴图后来才加载好：把占位菱形换成精灵
-      const first = c.children[0];
-      if (first && !(first instanceof PIXI.Sprite) && tex) {
-        c.removeChild(first);
-        first.destroy();
-        const s = new PIXI.Sprite(tex);
-        s.anchor.set(0.5, 1);
-        // Push sprite slightly downward so its base visually sits nearer the tile front edge
-        s.position.y = ISO_TILE_H * 0.6;
-        c.addChildAt(s, 0);
+  private syncBuildings(instances: BuildingInstance[]) {
+    if (!this.buildingLayer) return;
+    const nextIds = new Set(instances.map((instance) => instance.id));
+
+    for (const [id, node] of Array.from(this.buildingNodes.entries())) {
+      if (nextIds.has(id)) continue;
+      node.container.destroy({ children: true });
+      this.buildingNodes.delete(id);
+    }
+
+    for (const instance of instances) {
+      const node = this.ensureBuildingNode(instance);
+      const signature = `${instance.type}:${instance.level}:${instance.gx}:${instance.gy}:${instance.rotation}:${instance.variant}`;
+      if (node.signature !== signature) {
+        this.applyBuildingNode(node, instance);
+        node.signature = signature;
       }
-      return c;
     }
 
-    if (!this.buildingLayer) return new PIXI.Container();
-    c = new PIXI.Container();
+    this.sortDirty = true;
+  }
 
-    if (tex) {
-      const s = new PIXI.Sprite(tex);
-      s.anchor.set(0.5, 1);
-      // Push sprite slightly downward so its base visually sits nearer the tile front edge
-      s.position.y = ISO_TILE_H * 0.6;
-      c.addChild(s);
-    } else {
-      const g = new PIXI.Graphics();
-      g.poly(diamondPolygon(0, 0, 1.15)).fill({ color: 0x444444, alpha: 1 });
-      g.poly(diamondPolygon(0, 0, 1.15)).stroke({ color: 0xffd700, width: 2, alpha: 1 });
-      c.addChild(g);
+  private ensureBuildingNode(instance: BuildingInstance): BuildingNode {
+    const cached = this.buildingNodes.get(instance.id);
+    if (cached) return cached;
+
+    const container = new PIXI.Container();
+    const texture = this.assetsReady ? getTownTexture(getBuildingDef(instance.type).textureKey) : null;
+    const sprite = texture ? new PIXI.Sprite(texture) : new PIXI.Graphics();
+    if (sprite instanceof PIXI.Sprite) {
+      sprite.anchor.set(0.5, 1);
     }
-
     const label = new PIXI.Text({
       text: '',
       style: new PIXI.TextStyle({
         fontFamily: 'sans-serif',
         fontSize: 11,
         fill: 0xffffff,
-        align: 'center',
         stroke: { color: 0x000000, width: 3 },
       }),
     });
     label.anchor.set(0.5, 0.5);
-    label.position.set(0, -ISO_TILE_H / 4);
-    c.addChild(label);
+    const outline = new PIXI.Graphics();
+    container.addChild(sprite, label, outline);
+    this.buildingLayer?.addChild(container);
 
-    this.buildingLayer.addChild(c);
-    this.buildingSprites.set(type, c);
-    return c;
+    const node: BuildingNode = {
+      container,
+      sprite,
+      label,
+      outline,
+      signature: '',
+      sortValue: 0,
+    };
+    this.buildingNodes.set(instance.id, node);
+    return node;
   }
 
-  render(scene: TownPixiScene) {
-    if (!this.app?.renderer || !this.root || !this.ground || !this.hoverGfx || !this.previewGfx || !this.buildingLayer) return;
-    // 若尚未 resize 或画布为 0，用容器尺寸补一次，避免一直画到 0x0
-    const r = this.app.renderer;
-    if ((r.width === 0 || r.height === 0) && this.view.parentElement) {
-      const w = this.view.parentElement.clientWidth;
-      const h = this.view.parentElement.clientHeight;
-      if (w > 0 && h > 0) {
-        this.view.width = w;
-        this.view.height = h;
-        this.resize(w, h);
-      }
+  private applyBuildingNode(node: BuildingNode, instance: BuildingInstance) {
+    const def = getBuildingDef(instance.type);
+    const centerGx = instance.gx + (def.footprint.w - 1) / 2;
+    const centerGy = instance.gy + (def.footprint.h - 1) / 2;
+    const position = gridToScreen(centerGx, centerGy);
+    node.container.position.set(position.x, position.y);
+    node.label.text = `Lv.${instance.level}`;
+    node.label.position.set(0, -ISO_TILE_H / 4);
+
+    if (node.sprite instanceof PIXI.Sprite) {
+      const texture = this.assetsReady ? getTownTexture(def.textureKey) : null;
+      if (texture && node.sprite.texture !== texture) node.sprite.texture = texture;
+      node.sprite.anchor.set(def.anchor.x, def.anchor.y);
+      node.sprite.position.y = def.anchorOffsetY;
+      const targetWidth = footprintWidth(def.footprint.w, def.footprint.h) * 0.95;
+      const scale = node.sprite.texture.width > 0 ? targetWidth / node.sprite.texture.width : 1;
+      node.sprite.scale.set(scale, scale);
+    } else {
+      node.sprite.clear();
+      const scale = Math.max(1, (def.footprint.w + def.footprint.h) / 2) * 1.05;
+      node.sprite.poly(diamondPolygon(0, 0, scale)).fill({ color: 0x444444, alpha: 1 });
+      node.sprite.poly(diamondPolygon(0, 0, scale)).stroke({ color: 0xffd700, width: 2, alpha: 1 });
     }
-    void this.ensureTexturesLoaded();
 
-    const { townState, townHoverCell, townDragBuilding, townSelectedBuilding } = scene;
-    const positions: Record<string, { x: number; y: number }> = townState?.buildingPositions || {};
+    node.sortValue = position.y + def.obstacleHeight;
+    node.container.zIndex = node.sortValue;
+  }
 
-    // hover
+  private updateSelection(entityId: string | null) {
+    if (this.lastSelectionId === entityId) return;
+    this.lastSelectionId = entityId;
+    for (const [id, node] of Array.from(this.buildingNodes.entries())) {
+      const instance = this.snapshot?.townState.buildingInstances.find((item) => item.id === id);
+      if (!instance) continue;
+      const def = getBuildingDef(instance.type);
+      node.outline.clear();
+      if (id !== entityId) continue;
+      const scale = (def.footprint.w + def.footprint.h) / 2;
+      node.outline.poly(diamondPolygon(0, 0, scale * 1.05)).stroke({ color: 0xffaa00, width: 3, alpha: 1 });
+    }
+  }
+
+  private updateHover(cell: { x: number; y: number } | null) {
+    if (!this.hoverGfx) return;
+    const nextKey = cell ? `${cell.x},${cell.y}` : '';
+    if (this.lastHoverKey === nextKey) return;
+    this.lastHoverKey = nextKey;
     this.hoverGfx.clear();
-    if (townHoverCell) {
-      const p = gridToScreen(townHoverCell.x, townHoverCell.y);
-      this.hoverGfx.poly(diamondPolygon(p.x, p.y, 1)).fill({ color: 0xffd700, alpha: 0.2 });
-      this.hoverGfx.poly(diamondPolygon(p.x, p.y, 1)).stroke({ color: 0xffd700, width: 2, alpha: 0.7 });
-    }
+    if (!cell) return;
+    const p = gridToScreen(cell.x, cell.y);
+    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).fill({ color: 0xffd700, alpha: 0.18 });
+    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).stroke({ color: 0xffd700, width: 2, alpha: 0.7 });
+  }
 
-    // preview
+  private updatePreview(preview: { type: string; gx: number; gy: number } | null) {
+    if (!this.previewGfx) return;
+    const nextKey = preview ? `${preview.type}:${preview.gx},${preview.gy}` : '';
+    if (this.lastPreviewKey === nextKey) return;
+    this.lastPreviewKey = nextKey;
     this.previewGfx.clear();
-    if (townDragBuilding && townHoverCell) {
-      const p = gridToScreen(townHoverCell.x, townHoverCell.y);
-      this.previewGfx.poly(diamondPolygon(p.x, p.y, 1.15)).fill({ color: 0xffd700, alpha: 0.25 });
-      this.previewGfx.poly(diamondPolygon(p.x, p.y, 1.15)).stroke({ color: 0xffd700, width: 2, alpha: 0.9 });
-    }
+    if (!preview) return;
+    const def = getBuildingDef(preview.type);
+    const centerGx = preview.gx + (def.footprint.w - 1) / 2;
+    const centerGy = preview.gy + (def.footprint.h - 1) / 2;
+    const p = gridToScreen(centerGx, centerGy);
+    const scale = (def.footprint.w + def.footprint.h) / 2;
+    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).fill({ color: 0xffd700, alpha: 0.2 });
+    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).stroke({ color: 0xffd700, width: 2, alpha: 0.9 });
+  }
 
-    // buildings: depth order by gx+gy (iso)
-    const sorted = Object.entries(positions)
-      .map(([type, pos]) => ({ type, gx: pos.x, gy: pos.y }))
-      .sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy));
-
-    // hide all first (cheap for small N)
-    this.buildingSprites.forEach((c) => { c.visible = false; });
-
-    for (const it of sorted) {
-      const size = scene.buildingGridSize?.[it.type] ?? { w: 1, h: 1 };
-      // Treat (gx,gy) as top-left of the footprint; render at footprint center.
-      const centerGx = it.gx + (size.w - 1) / 2;
-      const centerGy = it.gy + (size.h - 1) / 2;
-      const p = gridToScreen(centerGx, centerGy);
-      const c = this.upsertBuilding(it.type);
-      c.visible = true;
-      c.position.set(p.x, p.y);
-
-      // Scale sprite to match footprint (so image size doesn't dictate tile coverage)
-      const first = c.children[0];
-      if (first instanceof PIXI.Sprite && first.texture?.width) {
-        const targetW = footprintScreenWidth(size.w, size.h) * 0.95; // a bit inset for readability
-        const s = targetW / first.texture.width;
-        first.scale.set(s, s);
-      } else if (first instanceof PIXI.Graphics) {
-        // Placeholder: scale diamond roughly to footprint size
-        first.clear();
-        const scale = Math.max(1, (size.w + size.h) / 2) * 1.05;
-        first.poly(diamondPolygon(0, 0, 1.15 * scale)).fill({ color: 0x444444, alpha: 1 });
-        first.poly(diamondPolygon(0, 0, 1.15 * scale)).stroke({ color: 0xffd700, width: 2, alpha: 1 });
-      }
-
-      // update label
-      const level = townState?.buildings?.[it.type] ?? 0;
-      const label = c.children.find((ch) => ch instanceof PIXI.Text) as PIXI.Text | undefined;
-      if (label) label.text = `Lv.${level}`;
-
-      // selection outline (Pixi v8: use label instead of name)
-      let outline = c.children.find((ch) => (ch as PIXI.Container).label === '__outline') as PIXI.Graphics | null;
-      if (!outline) {
-        outline = new PIXI.Graphics();
-        outline.label = '__outline';
-        c.addChild(outline);
-      }
-      outline.clear();
-      if (townSelectedBuilding === it.type) {
-        // Outline should cover the whole building footprint (w*h tiles), not just one tile
-        const footprintScale = (size.w + size.h) / 2;
-        outline.poly(diamondPolygon(0, 0, footprintScale * 1.05)).stroke({ color: 0xffaa00, width: 3, alpha: 1 });
-      }
-    }
-
-    this.app.renderer.render(this.app.stage);
+  private sortBuildings() {
+    if (!this.buildingLayer) return;
+    const nodes = Array.from(this.buildingNodes.values()).sort((a, b) => a.sortValue - b.sortValue);
+    for (const node of nodes) this.buildingLayer.addChild(node.container);
+    this.sortDirty = false;
   }
 }
+
 
