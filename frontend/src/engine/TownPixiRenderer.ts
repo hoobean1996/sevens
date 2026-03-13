@@ -5,6 +5,11 @@ import { getBuildingDef } from './townDefinitions';
 import { BuildingInstance, TownMapData } from './types';
 import { TownSnapshot } from './TownController';
 
+const TOWN_SELECTION_COLOR = 0xaee6ff;
+const TOWN_HOVER_COLOR = 0x7cc7ff;
+const TOWN_PREVIEW_COLOR = 0x98dbff;
+const TOWN_FALLBACK_STROKE = 0x7cc7ff;
+
 function diamondPolygon(cx: number, cy: number, scale = 1) {
   const w = (ISO_TILE_W / 2) * scale;
   const h = (ISO_TILE_H / 2) * scale;
@@ -285,7 +290,7 @@ export class TownPixiRenderer {
       node.sprite.clear();
       const scale = Math.max(1, (def.footprint.w + def.footprint.h) / 2) * 1.05;
       node.sprite.poly(diamondPolygon(0, 0, scale)).fill({ color: 0x444444, alpha: 1 });
-      node.sprite.poly(diamondPolygon(0, 0, scale)).stroke({ color: 0xffd700, width: 2, alpha: 1 });
+      node.sprite.poly(diamondPolygon(0, 0, scale)).stroke({ color: TOWN_FALLBACK_STROKE, width: 2, alpha: 1 });
     }
 
     node.sortValue = position.y + def.obstacleHeight;
@@ -302,7 +307,7 @@ export class TownPixiRenderer {
       node.outline.clear();
       if (id !== entityId) continue;
       const scale = (def.footprint.w + def.footprint.h) / 2;
-      node.outline.poly(diamondPolygon(0, 0, scale * 1.05)).stroke({ color: 0xffaa00, width: 3, alpha: 1 });
+      node.outline.poly(diamondPolygon(0, 0, scale * 1.05)).stroke({ color: TOWN_SELECTION_COLOR, width: 3, alpha: 1 });
     }
   }
 
@@ -314,8 +319,8 @@ export class TownPixiRenderer {
     this.hoverGfx.clear();
     if (!cell) return;
     const p = gridToScreen(cell.x, cell.y);
-    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).fill({ color: 0xffd700, alpha: 0.18 });
-    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).stroke({ color: 0xffd700, width: 2, alpha: 0.7 });
+    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).fill({ color: TOWN_HOVER_COLOR, alpha: 0.16 });
+    this.hoverGfx.poly(diamondPolygon(p.x, p.y)).stroke({ color: TOWN_HOVER_COLOR, width: 2, alpha: 0.72 });
   }
 
   private updatePreview(preview: { type: string; gx: number; gy: number } | null) {
@@ -330,8 +335,8 @@ export class TownPixiRenderer {
     const centerGy = preview.gy + (def.footprint.h - 1) / 2;
     const p = gridToScreen(centerGx, centerGy);
     const scale = (def.footprint.w + def.footprint.h) / 2;
-    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).fill({ color: 0xffd700, alpha: 0.2 });
-    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).stroke({ color: 0xffd700, width: 2, alpha: 0.9 });
+    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).fill({ color: TOWN_PREVIEW_COLOR, alpha: 0.22 });
+    this.previewGfx.poly(diamondPolygon(p.x, p.y, scale * 1.05)).stroke({ color: TOWN_PREVIEW_COLOR, width: 2, alpha: 0.92 });
   }
 
   private sortBuildings() {

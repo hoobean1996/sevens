@@ -6,6 +6,11 @@ import BuildingPanel from './BuildingPanel';
 import './TownScreen.css';
 
 const TICK_INTERVAL_SEC = 10;
+const RESOURCE_BUILDING_LABELS = {
+  lumber: '木材',
+  quarry: '石材',
+  mine: '矿石',
+} as const;
 
 interface Props {
   mapWrapRef: React.RefObject<HTMLDivElement | null>;
@@ -114,9 +119,11 @@ const TownScreen: React.FC<Props> = ({
     const { type, level } = selectedBuilding;
     if (!selectedDef.upgradable || level >= selectedDef.maxLevel) return null;
 
-    if (type === 'lumber') {
-      const currentYield = getResourceYield('lumber', level);
-      const nextYield = getResourceYield('lumber', level + 1);
+    if (type in RESOURCE_BUILDING_LABELS) {
+      const resourceType = type as keyof typeof RESOURCE_BUILDING_LABELS;
+      const resourceLabel = RESOURCE_BUILDING_LABELS[resourceType];
+      const currentYield = getResourceYield(resourceType, level);
+      const nextYield = getResourceYield(resourceType, level + 1);
       const delta = nextYield - currentYield;
       return (
         <div className="town-building-upgrade-diff">
@@ -124,13 +131,13 @@ const TownScreen: React.FC<Props> = ({
           <div className="town-building-upgrade-row">
             <span className="label">当前产量</span>
             <span className="value">
-              {currentYield.toFixed(1)} 木材 / {TICK_INTERVAL_SEC}s
+              {currentYield.toFixed(1)} {resourceLabel} / {TICK_INTERVAL_SEC}s
             </span>
           </div>
           <div className="town-building-upgrade-row">
             <span className="label">升级后</span>
             <span className="value">
-              {nextYield.toFixed(1)} 木材 / {TICK_INTERVAL_SEC}s
+              {nextYield.toFixed(1)} {resourceLabel} / {TICK_INTERVAL_SEC}s
               <span className="delta">（+{delta.toFixed(1)}）</span>
             </span>
           </div>
