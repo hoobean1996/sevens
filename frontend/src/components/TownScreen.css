@@ -27,6 +27,13 @@
   gap: 8px;
 }
 
+.town-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .town-title {
   font-size: 28px;
   color: #ffd700;
@@ -54,6 +61,53 @@
   color: #fff;
   text-shadow: 0 1px 2px rgba(0,0,0,0.5);
   transition: 0.25s;
+}
+
+.town-edit-btn {
+  padding: 10px 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 215, 122, 0.35);
+  background: rgba(255, 215, 122, 0.08);
+  color: #ffe0a0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.town-edit-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 215, 122, 0.15);
+  border-color: rgba(255, 215, 122, 0.55);
+}
+
+.town-edit-action-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.town-edit-btn-save {
+  background: linear-gradient(135deg, rgba(45, 132, 79, 0.95), rgba(87, 193, 118, 0.9));
+  border-color: rgba(149, 255, 177, 0.5);
+  color: #f4fff7;
+}
+
+.town-edit-btn-save:hover {
+  background: linear-gradient(135deg, rgba(55, 147, 89, 1), rgba(104, 214, 136, 0.96));
+}
+
+.town-edit-btn-cancel {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #d8d8d8;
+}
+
+.town-edit-btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
 .town-start-btn:hover {
@@ -211,9 +265,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   background: rgba(0,0,0,0.3);
   border-radius: 8px;
   overflow: hidden;
+}
+
+.town-map-wrap.is-editing {
+  box-shadow: 0 0 0 1px rgba(120, 255, 160, 0.3), 0 0 28px rgba(76, 194, 111, 0.12);
+}
+
+.town-edit-banner {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 1;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 255, 160, 0.26);
+  background: linear-gradient(135deg, rgba(23, 70, 40, 0.82), rgba(12, 18, 22, 0.84));
+  color: #dcffe4;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
 }
 
 .town-map-wrap > canvas {
@@ -289,4 +366,358 @@
 .town-clear-selection-btn:hover {
   background: rgba(255,255,255,0.1);
   color: #ccc;
+}
+
+.town-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(255, 193, 71, 0.1), transparent 40%),
+    rgba(4, 4, 10, 0.82);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 260;
+}
+
+.town-building-panel {
+  width: min(760px, calc(100vw - 48px));
+  min-height: 460px;
+  max-height: min(86vh, 760px);
+  padding: 28px 30px 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 215, 122, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 220, 130, 0.08) 0%, rgba(255, 220, 130, 0) 24%),
+    linear-gradient(135deg, rgba(36, 23, 9, 0.88), rgba(10, 10, 18, 0.96));
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 232, 178, 0.08) inset,
+    0 0 28px rgba(255, 191, 71, 0.18);
+  color: #e8dcc3;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow: auto;
+}
+
+.town-building-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 215, 122, 0.16);
+}
+
+.town-building-panel-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.town-building-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.town-building-panel-icon {
+  width: 74px;
+  height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 215, 122, 0.2), rgba(255, 153, 0, 0.08));
+  border: 1px solid rgba(255, 215, 122, 0.2);
+  overflow: hidden;
+  box-shadow: 0 0 18px rgba(255, 191, 71, 0.12);
+}
+
+.town-building-panel-icon-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.town-building-panel-icon-fallback {
+  color: #ffd36b;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.town-building-panel-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.town-building-panel-subtitle {
+  font-size: 12px;
+  letter-spacing: 1.6px;
+  color: rgba(240, 223, 183, 0.6);
+}
+
+.town-building-panel-level-badge {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 215, 122, 0.28);
+  background: rgba(255, 215, 122, 0.08);
+  color: #ffd36b;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+
+.town-panel-close-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.04);
+  color: #c8c8c8;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+.town-panel-close-btn:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  border-color: rgba(255,255,255,0.28);
+}
+
+.town-building-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.town-building-panel-card {
+  padding: 18px 20px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 215, 122, 0.12);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)),
+    rgba(12, 12, 20, 0.64);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.town-building-panel-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.town-building-panel-kicker {
+  font-size: 12px;
+  color: #ffd36b;
+  letter-spacing: 2.2px;
+  text-transform: uppercase;
+}
+
+.town-building-panel-description {
+  font-size: 15px;
+  line-height: 1.7;
+  color: #e8dcc3;
+}
+
+.town-building-panel-cost-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.town-building-panel-cost-item .label {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: rgba(240, 223, 183, 0.58);
+}
+
+.town-building-panel-cost-item .value {
+  font-size: 15px;
+  color: #fff3cd;
+  font-weight: 700;
+}
+
+.town-building-panel-upgrade-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.town-building-panel-cost-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.town-building-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.town-upgrade-btn-large {
+  min-width: 184px;
+  min-height: 52px;
+  padding: 14px 22px;
+  border-radius: 14px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  background: linear-gradient(135deg, rgba(255, 166, 0, 0.24), rgba(255, 94, 0, 0.18));
+  border-color: rgba(255, 210, 102, 0.75);
+  box-shadow: 0 12px 26px rgba(255, 128, 0, 0.14);
+}
+
+.town-upgrade-btn-large.is-ready {
+  background: linear-gradient(135deg, rgba(43, 148, 90, 0.95), rgba(88, 201, 126, 0.88));
+  border-color: rgba(140, 255, 180, 0.8);
+  color: #f3fff5;
+  box-shadow: 0 12px 26px rgba(60, 176, 100, 0.28);
+}
+
+.town-upgrade-btn-large.is-ready:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(53, 165, 100, 1), rgba(104, 224, 145, 0.95));
+  transform: translateY(-1px);
+}
+
+.town-upgrade-btn-large.is-disabled {
+  background: linear-gradient(135deg, rgba(90, 90, 90, 0.28), rgba(56, 56, 56, 0.28));
+  border-color: rgba(160, 160, 160, 0.28);
+  color: rgba(232, 232, 232, 0.62);
+  box-shadow: none;
+}
+
+.town-building-panel-cost-item.affordable {
+  border-color: rgba(107, 215, 141, 0.24);
+  background: linear-gradient(180deg, rgba(70, 160, 96, 0.14), rgba(255, 255, 255, 0.03));
+}
+
+.town-building-panel-cost-item.affordable .value {
+  color: #bbf7c8;
+}
+
+.town-building-panel-cost-item.insufficient {
+  border-color: rgba(255, 118, 118, 0.2);
+  background: linear-gradient(180deg, rgba(164, 62, 62, 0.16), rgba(255, 255, 255, 0.02));
+}
+
+.town-building-panel-cost-item.insufficient .value {
+  color: #ffb4b4;
+}
+
+.town-upgrade-btn-large:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(255, 179, 51, 0.34), rgba(255, 111, 0, 0.26));
+  transform: translateY(-1px);
+}
+
+.town-building-panel-extra {
+  margin-top: 2px;
+}
+
+.town-building-upgrade-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.town-building-upgrade-title {
+  font-size: 13px;
+  color: #ffd700;
+  letter-spacing: 1px;
+}
+
+.town-building-upgrade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.town-building-upgrade-row .label {
+  color: #b3aa98;
+}
+
+.town-building-upgrade-row .value {
+  color: #ffd700;
+}
+
+.town-building-upgrade-row .delta {
+  margin-left: 6px;
+  color: #7cff7c;
+}
+
+@media (max-width: 900px) {
+  .town-building-panel {
+    width: min(680px, calc(100vw - 32px));
+    min-height: 0;
+    padding: 22px 20px 18px;
+  }
+
+  .town-building-panel-cost-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .town-header-actions,
+  .town-edit-action-group {
+    width: 100%;
+  }
+
+  .town-edit-btn,
+  .town-start-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .town-panel-overlay {
+    padding: 14px;
+    align-items: flex-end;
+  }
+
+  .town-building-panel {
+    width: 100%;
+    max-height: 88vh;
+    border-radius: 22px 22px 0 0;
+    padding: 20px 16px 18px;
+  }
+
+  .town-building-panel-header {
+    gap: 12px;
+  }
+
+  .town-building-panel-title-wrap {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .town-building-panel-title {
+    width: 100%;
+  }
+
+  .town-building-panel-level-badge {
+    padding: 8px 12px;
+  }
+
+  .town-upgrade-btn-large {
+    width: 100%;
+  }
+
+  .town-building-panel-actions {
+    justify-content: stretch;
+  }
 }

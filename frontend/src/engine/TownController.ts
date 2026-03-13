@@ -1,6 +1,6 @@
 import { BUILDING_GRID_SIZE, TOWN_GRID_H, TOWN_GRID_W, gridToScreen, pointInDiamond, screenToGrid } from './townConfig';
 import { BUILDING_DEFS, DEFAULT_BUILDING_ORDER, createBuildingInstance, createDefaultTownMap, getBuildingDef } from './townDefinitions';
-import { BuildingInstance, BuildQueueItem, BuildingPosition, TownBonus, TownState } from './types';
+import { BuildingInstance, BuildQueueItem, BuildingPosition, TownBonus, TownInteractionMode, TownState } from './types';
 
 const STORAGE_KEY = 'sevens_town_state';
 const BUILD_QUEUE_MAX_SLOTS = 3;
@@ -75,9 +75,12 @@ export interface TownSnapshot {
 export class TownController {
   private townState: TownState | null = null;
   private selectedEntityId: string | null = null;
+  private interactionMode: TownInteractionMode = 'preview';
+  private draftBuildingInstances: BuildingInstance[] | null = null;
   private townHoverCell: { x: number; y: number } | null = null;
   private dragEntityId: string | null = null;
   private dragStartCell: { x: number; y: number } | null = null;
+  private pendingClickEntityId: string | null = null;
   private dragCamera = false;
   private lastDragX = 0;
   private lastDragY = 0;
@@ -107,6 +110,65 @@ export class TownController {
 
   getSelectedEntityId(): string | null {
     return this.selectedEntityId;
+  }
+
+  getInteractionMode(): TownInteractionMode {
+    return this.interactionMode;
+  }
+
+  setInteractionMode(mode: TownInteractionMode) {
+    if (mode === this.interactionMode) return;
+    if (mode === 'edit') {
+      this.beginTownEdit();
+      return;
+    }
+    if (this.interactionMode === 'edit') {
+      this.cancelTownEdit();
+      return;
+    }
+    this.interactionMode = mode;
+  }
+
+  beginTownEdit() {
+    if (!this.townState) return;
+    this.interactionMode = 'edit';
+    this.draftBuildingInstances = this.cloneInstances(this.townState.buildingInstances);
+    this.clearSelection();
+    this.pendingClickEntityId = null;
+    this.bumpObjects();
+    this.notifyTownUpdate();
+  }
+
+  commitTownEdit() {
+    if (!this.townState || !this.draftBuildingInstances) {
+      this.interactionMode = 'preview';
+      return;
+    }
+    this.townState.buildingInstances = this.cloneInstances(this.draftBuildingInstances);
+    this.townState.buildings = buildSummary(this.townState.buildingInstances);
+    this.draftBuildingInstances = null;
+    this.interactionMode = 'preview';
+    this.dragEntityId = null;
+    this.dragStartCell = null;
+    this.pendingClickEntityId = null;
+    this.persistTownState();
+    this.bumpObjects();
+    this.notifyTownUpdate();
+  }
+
+  cancelTownEdit() {
+    this.draftBuildingInstances = null;
+    this.interactionMode = 'preview';
+    this.dragEntityId = null;
+    this.dragStartCell = null;
+    this.pendingClickEntityId = null;
+    this.clearSelection();
+    this.bumpObjects();
+    this.notifyTownUpdate();
+  }
+
+  isTownEditing(): boolean {
+    return this.interactionMode === 'edit';
   }
 
   getSelectedBuilding(): BuildingInstance | null {
@@ -225,6 +287,7 @@ export class TownController {
     this.selectedEntityId = null;
     this.dragEntityId = null;
     this.dragStartCell = null;
+    this.pendingClickEntityId = null;
     this.onSelectionChange?.(null);
   }
 
@@ -261,18 +324,35 @@ export class TownController {
     }
     const cell = this.getTownMouseGrid(canvas, clientX, clientY);
     this.townHoverCell = cell;
+    this.pendingClickEntityId = null;
+    this.dragEntityId = null;
+    this.dragStartCell = null;
     if (!cell) return;
     const building = this.getBuildingAtGrid(cell.x, cell.y);
+    if (this.interactionMode === 'preview') {
+      this.pendingClickEntityId = building?.id ?? null;
+      return;
+    }
     if (!building) return;
     this.dragEntityId = building.id;
     this.dragStartCell = { x: cell.x, y: cell.y };
-    this.selectedEntityId = building.id;
-    this.onSelectionChange?.(building.id);
   }
 
   handleMouseUp(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
     if (this.dragCamera) {
       this.dragCamera = false;
+      return;
+    }
+    if (this.interactionMode === 'preview') {
+      const cell = this.getTownMouseGrid(canvas, clientX, clientY);
+      const building = cell ? this.getBuildingAtGrid(cell.x, cell.y) : null;
+      if (building && building.id === this.pendingClickEntityId) {
+        this.selectedEntityId = building.id;
+        this.onSelectionChange?.(building.id);
+      } else if (!building) {
+        this.clearSelection();
+      }
+      this.pendingClickEntityId = null;
       return;
     }
     if (!this.dragEntityId) return;
@@ -300,22 +380,27 @@ export class TownController {
 
   getSnapshot(): TownSnapshot | null {
     if (!this.townState) return null;
+    const activeInstances = this.getActiveBuildingInstances();
     return {
-      townState: this.townState,
+      townState: {
+        ...this.townState,
+        buildings: buildSummary(activeInstances),
+        buildingInstances: activeInstances,
+      },
       versions: {
         state: this.stateVersion,
         map: this.mapVersion,
         objects: this.objectsVersion,
       },
       townHoverCell: this.townHoverCell,
-      previewPlacement: this.dragEntityId && this.townHoverCell
+      previewPlacement: this.interactionMode === 'edit' && this.dragEntityId && this.townHoverCell
         ? {
             type: this.getBuildingById(this.dragEntityId)?.type ?? '',
             gx: this.townHoverCell.x,
             gy: this.townHoverCell.y,
           }
         : null,
-      selectedEntityId: this.selectedEntityId,
+      selectedEntityId: this.interactionMode === 'preview' ? this.selectedEntityId : null,
     };
   }
 
@@ -437,11 +522,11 @@ export class TownController {
 
   private getBuildingById(buildingId: string | null): BuildingInstance | null {
     if (!buildingId) return null;
-    return this.townState?.buildingInstances.find((instance) => instance.id === buildingId) ?? null;
+    return this.getActiveBuildingInstances().find((instance) => instance.id === buildingId) ?? null;
   }
 
   private getBuildingAtGrid(gx: number, gy: number): BuildingInstance | null {
-    for (const instance of this.townState?.buildingInstances ?? []) {
+    for (const instance of this.getActiveBuildingInstances()) {
       const size = BUILDING_GRID_SIZE[instance.type] ?? { w: 1, h: 1 };
       if (gx >= instance.gx && gx < instance.gx + size.w && gy >= instance.gy && gy < instance.gy + size.h) {
         return instance;
@@ -451,14 +536,16 @@ export class TownController {
   }
 
   private moveBuilding(buildingId: string, gx: number, gy: number): boolean {
-    const building = this.getBuildingById(buildingId);
-    if (!building || !this.townState) return false;
+    if (this.interactionMode !== 'edit' || !this.townState) return false;
+    const instances = this.getActiveBuildingInstances();
+    const building = instances.find((instance) => instance.id === buildingId);
+    if (!building) return false;
     const size = BUILDING_GRID_SIZE[building.type] ?? { w: 1, h: 1 };
     if (gx < 0 || gy < 0 || gx + size.w > this.townState.map.width || gy + size.h > this.townState.map.height) {
       return false;
     }
 
-    for (const other of this.townState.buildingInstances) {
+    for (const other of instances) {
       if (other.id === building.id) continue;
       const otherSize = BUILDING_GRID_SIZE[other.type] ?? { w: 1, h: 1 };
       const disjoint = gx + size.w <= other.gx || other.gx + otherSize.w <= gx || gy + size.h <= other.gy || other.gy + otherSize.h <= gy;
@@ -467,10 +554,16 @@ export class TownController {
 
     building.gx = gx;
     building.gy = gy;
-    this.persistTownState();
     this.bumpObjects();
-    this.notifyTownUpdate();
     return true;
+  }
+
+  private getActiveBuildingInstances(): BuildingInstance[] {
+    return this.interactionMode === 'edit' && this.draftBuildingInstances ? this.draftBuildingInstances : (this.townState?.buildingInstances ?? []);
+  }
+
+  private cloneInstances(instances: BuildingInstance[]): BuildingInstance[] {
+    return instances.map((instance) => ({ ...instance }));
   }
 
   private getTownMouseGrid(canvas: HTMLCanvasElement, clientX: number, clientY: number): { x: number; y: number } | null {

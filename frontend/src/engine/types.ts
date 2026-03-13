@@ -220,6 +220,8 @@ export interface BuildingInstance {
   variant: string;
 }
 
+export type TownInteractionMode = 'preview' | 'edit';
+
 export interface TownState {
   resources: { wood: number; stone: number; ore: number; gold: number };
   buildings: Record<string, number>;
@@ -236,7 +238,7 @@ export interface TownBonus {
   defMult: number;
 }
 
-export const RARITY_NAMES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary'];
+export const RARITY_NAMES = ['普通', '优秀', '稀有', '史诗', '传说'];
 export const RARITY_COLORS = ['#cccccc', '#44ff44', '#4488ff', '#bb44ff', '#ff8800'];
 
 export const RARITY_STRING_COLORS: Record<string, string> = {
@@ -255,19 +257,19 @@ export const SHOP_ICONS: Record<string, string> = {
 };
 
 export const SLOT_NAMES: Record<string, string> = {
-  weapon: 'Weapon',
-  armor: 'Armor',
-  helmet: 'Helmet',
-  boots: 'Boots',
-  ring: 'Ring',
-  amulet: 'Amulet',
+  weapon: '武器',
+  armor: '护甲',
+  helmet: '头盔',
+  boots: '靴子',
+  ring: '戒指',
+  amulet: '项链',
 };
 
 export const SLOT_ICONS: Record<string, string> = {
-  weapon: 'W',
-  armor: 'A',
-  helmet: 'H',
-  boots: 'B',
-  ring: 'R',
-  amulet: 'M',
+  weapon: '武',
+  armor: '甲',
+  helmet: '盔',
+  boots: '靴',
+  ring: '戒',
+  amulet: '链',
 };

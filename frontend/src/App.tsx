@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GameEngine, GameMode } from './engine/GameEngine';
-import { BuildingInstance, PlayerState, ShopState, TownState } from './engine/types';
+import { BuildingInstance, PlayerState, ShopState, TownInteractionMode, TownState } from './engine/types';
 import StartScreen from './components/StartScreen';
 import TownScreen from './components/TownScreen';
 import HUD from './components/HUD';
@@ -26,6 +26,7 @@ function App() {
   const [wave, setWave] = useState(0);
   const [announceWave, setAnnounceWave] = useState(0);
   const [townState, setTownState] = useState<TownState | null>(null);
+  const [townInteractionMode, setTownInteractionMode] = useState<TownInteractionMode>('preview');
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingInstance | null>(null);
   const [resourceCaps, setResourceCaps] = useState({ wood: 0, stone: 0, ore: 0 });
   const [showInventory, setShowInventory] = useState(false);
@@ -70,6 +71,7 @@ function App() {
 
     engine.initTownState();
     setTownState(engine.townState);
+    setTownInteractionMode(engine.getTownInteractionMode());
     setSelectedBuilding(engine.getSelectedTownBuilding(null));
     setResourceCaps(engine.getResourceCaps());
     engineRef.current = engine;
@@ -222,8 +224,39 @@ function App() {
     const engine = engineRef.current;
     if (!engine) return;
     engine.backToTown();
+    setTownInteractionMode(engine.getTownInteractionMode());
+    setSelectedBuilding(null);
     setShowEscMenu(false);
     engine.escMenuOpen = false;
+  }, []);
+
+  const handleStartTownEdit = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.beginTownEdit();
+    setTownInteractionMode(engine.getTownInteractionMode());
+    setSelectedBuilding(null);
+    setTownState(engine.townState);
+  }, []);
+
+  const handleSaveTownEdit = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.commitTownEdit();
+    setTownInteractionMode(engine.getTownInteractionMode());
+    setSelectedBuilding(null);
+    setTownState(engine.townState);
+    setResourceCaps(engine.getResourceCaps());
+  }, []);
+
+  const handleCancelTownEdit = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.cancelTownEdit();
+    setTownInteractionMode(engine.getTownInteractionMode());
+    setSelectedBuilding(null);
+    setTownState(engine.townState);
+    setResourceCaps(engine.getResourceCaps());
   }, []);
 
   const townBonus = engineRef.current?.townBonus || { atkMult: 1, hpMult: 1, defMult: 1 };
@@ -234,12 +267,16 @@ function App() {
         <TownScreen
           mapWrapRef={mapWrapRef}
           townState={townState}
+          interactionMode={townInteractionMode}
           resourceCaps={resourceCaps}
           selectedBuilding={selectedBuilding}
           onClearSelection={() => {
             engineRef.current?.clearTownSelection();
             setSelectedBuilding(null);
           }}
+          onStartEdit={handleStartTownEdit}
+          onSaveEdit={handleSaveTownEdit}
+          onCancelEdit={handleCancelTownEdit}
           onStartAdventure={handleStartAdventure}
           onUpgrade={handleUpgrade}
           isBuildingInQueue={(buildingId) => engineRef.current?.isBuildingInQueue(buildingId) ?? false}

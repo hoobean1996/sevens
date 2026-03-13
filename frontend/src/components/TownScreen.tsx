@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BuildQueueItem, BuildingInstance, TownState } from '../engine/types';
+import { BuildQueueItem, BuildingInstance, TownInteractionMode, TownState } from '../engine/types';
 import { getBuildingDef } from '../engine/townDefinitions';
+import { getResourceYield } from '../engine/townYield';
+import BuildingPanel from './BuildingPanel';
 import './TownScreen.css';
 
 const TICK_INTERVAL_SEC = 10;
@@ -8,9 +10,13 @@ const TICK_INTERVAL_SEC = 10;
 interface Props {
   mapWrapRef: React.RefObject<HTMLDivElement | null>;
   townState: TownState | null;
+  interactionMode: TownInteractionMode;
   resourceCaps: { wood: number; stone: number; ore: number };
   selectedBuilding: BuildingInstance | null;
   onClearSelection: () => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
   onStartAdventure: () => void;
   onUpgrade: (buildingId: string) => void;
   isBuildingInQueue: (buildingId: string) => boolean;
@@ -28,9 +34,13 @@ interface ResourceFloat {
 const TownScreen: React.FC<Props> = ({
   mapWrapRef,
   townState,
+  interactionMode,
   resourceCaps,
   selectedBuilding,
   onClearSelection,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
   onStartAdventure,
   onUpgrade,
   isBuildingInQueue,
@@ -77,28 +87,90 @@ const TownScreen: React.FC<Props> = ({
   }, [wood, stone, ore]);
 
   const progress = ((TICK_INTERVAL_SEC - countdown) / TICK_INTERVAL_SEC) * 100;
-  const getQueueRemainingSec = (item: BuildQueueItem | null) => item ? Math.max(0, item.completesAt - Math.floor(Date.now() / 1000)) : 0;
+  const getQueueRemainingSec = (item: BuildQueueItem | null) =>
+    item ? Math.max(0, item.completesAt - Math.floor(Date.now() / 1000)) : 0;
 
   const selectedDef = selectedBuilding ? getBuildingDef(selectedBuilding.type) : null;
-  const selectedCost = selectedBuilding ? getUpgradeCost(selectedBuilding.id) : { wood: 0, stone: 0, ore: 0, gold: 0 };
+  const selectedCost = selectedBuilding
+    ? getUpgradeCost(selectedBuilding.id)
+    : { wood: 0, stone: 0, ore: 0, gold: 0 };
   const selectedQueued = selectedBuilding ? isBuildingInQueue(selectedBuilding.id) : false;
   const queueFull = !hasEmptyBuildQueueSlot();
-  const canUpgrade = !!selectedBuilding && selectedDef?.upgradable && !selectedQueued && !queueFull && selectedBuilding.level < selectedDef.maxLevel;
+  const hasEnoughResources =
+    resources.wood >= selectedCost.wood &&
+    resources.stone >= selectedCost.stone &&
+    resources.ore >= selectedCost.ore &&
+    resources.gold >= selectedCost.gold;
+  const canUpgrade =
+    !!selectedBuilding &&
+    selectedDef?.upgradable &&
+    !selectedQueued &&
+    !queueFull &&
+    hasEnoughResources &&
+    selectedBuilding.level < selectedDef.maxLevel;
+
+  const renderBuildingExtra = () => {
+    if (!selectedBuilding || !selectedDef) return null;
+    const { type, level } = selectedBuilding;
+    if (!selectedDef.upgradable || level >= selectedDef.maxLevel) return null;
+
+    if (type === 'lumber') {
+      const currentYield = getResourceYield('lumber', level);
+      const nextYield = getResourceYield('lumber', level + 1);
+      const delta = nextYield - currentYield;
+      return (
+        <div className="town-building-upgrade-diff">
+          <div className="town-building-upgrade-title">升级后变化</div>
+          <div className="town-building-upgrade-row">
+            <span className="label">当前产量</span>
+            <span className="value">
+              {currentYield.toFixed(1)} 木材 / {TICK_INTERVAL_SEC}s
+            </span>
+          </div>
+          <div className="town-building-upgrade-row">
+            <span className="label">升级后</span>
+            <span className="value">
+              {nextYield.toFixed(1)} 木材 / {TICK_INTERVAL_SEC}s
+              <span className="delta">（+{delta.toFixed(1)}）</span>
+            </span>
+          </div>
+        </div>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className="town-layout">
       <header className="town-header">
         <div className="town-header-left">
-          <div className="town-title">Town of Sevens</div>
-          <div className="town-subtitle">I S O M E T R I C   T O W N</div>
-          <button className="town-start-btn" onClick={onStartAdventure}>
-            Start Adventure
-          </button>
+          <div className="town-title">七星之都</div>
+          <div className="town-subtitle">T O W N &nbsp; O F &nbsp; S E V E N S</div>
+          <div className="town-header-actions">
+            <button className="town-start-btn" onClick={onStartAdventure}>
+              开始冒险
+            </button>
+            {interactionMode === 'preview' ? (
+              <button className="town-edit-btn" onClick={onStartEdit}>
+                城镇编辑
+              </button>
+            ) : (
+              <div className="town-edit-action-group">
+                <button className="town-edit-btn town-edit-btn-save" onClick={onSaveEdit}>
+                  保存布局
+                </button>
+                <button className="town-edit-btn town-edit-btn-cancel" onClick={onCancelEdit}>
+                  取消编辑
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="town-header-right">
           <div className="town-resources">
             <div className="town-resource-row">
-              <span>Wood</span>
+              <span>木材</span>
               <span className="town-resource-value-wrap">
                 <span className="town-resource-value">{Math.floor(resources.wood)}</span>
                 {floats.filter((item) => item.type === 'wood').map((item) => (
@@ -108,7 +180,7 @@ const TownScreen: React.FC<Props> = ({
               <span className="town-resource-cap">/ {resourceCaps.wood}</span>
             </div>
             <div className="town-resource-row">
-              <span>Stone</span>
+              <span>石材</span>
               <span className="town-resource-value-wrap">
                 <span className="town-resource-value">{Math.floor(resources.stone)}</span>
                 {floats.filter((item) => item.type === 'stone').map((item) => (
@@ -118,7 +190,7 @@ const TownScreen: React.FC<Props> = ({
               <span className="town-resource-cap">/ {resourceCaps.stone}</span>
             </div>
             <div className="town-resource-row">
-              <span>Ore</span>
+              <span>矿石</span>
               <span className="town-resource-value-wrap">
                 <span className="town-resource-value">{Math.floor(resources.ore)}</span>
                 {floats.filter((item) => item.type === 'ore').map((item) => (
@@ -128,12 +200,12 @@ const TownScreen: React.FC<Props> = ({
               <span className="town-resource-cap">/ {resourceCaps.ore}</span>
             </div>
             <div className="town-resource-row">
-              <span>Gold</span>
+              <span>金币</span>
               <span className="town-resource-value">{Math.floor(resources.gold)}</span>
             </div>
           </div>
           <div className="town-production-panel">
-            <span className="town-production-label">Next Tick</span>
+            <span className="town-production-label">下次产出</span>
             <span className="town-production-countdown">{countdown}s</span>
             <div className="town-production-progress-wrap">
               <div className="town-production-progress" style={{ width: `${progress}%` }} />
@@ -144,7 +216,7 @@ const TownScreen: React.FC<Props> = ({
 
       <div className="town-body">
         <aside className="town-queue-panel">
-          <h3 className="town-queue-title">Build Queue</h3>
+          <h3 className="town-queue-title">建造队列</h3>
           <div className="town-queue-slots">
             {[0, 1, 2].map((index) => {
               const unlocked = index < slotsUnlocked;
@@ -152,8 +224,8 @@ const TownScreen: React.FC<Props> = ({
               const remain = getQueueRemainingSec(item);
               return (
                 <div key={index} className={`town-queue-slot ${unlocked ? '' : 'locked'}`}>
-                  {!unlocked && <span className="town-queue-slot-label">Unlock at Hall Lv.{index === 1 ? 3 : 6}</span>}
-                  {unlocked && !item && <span className="town-queue-slot-empty">Empty</span>}
+                  {!unlocked && <span className="town-queue-slot-label">主城 Lv.{index === 1 ? 3 : 6} 解锁</span>}
+                  {unlocked && !item && <span className="town-queue-slot-empty">空</span>}
                   {unlocked && item && (
                     <>
                       <span className="town-queue-slot-name">{getBuildingDef(item.buildingType).name}</span>
@@ -166,46 +238,35 @@ const TownScreen: React.FC<Props> = ({
             })}
           </div>
 
-          {selectedBuilding && selectedDef && (
-            <div className="town-building-detail-card">
-              <div className="town-detail-header">
-                <span className="town-detail-icon">{selectedDef.icon}</span>
-                <span className="town-detail-name">{selectedDef.name}</span>
-                <span className="town-detail-level">Lv.{selectedBuilding.level}</span>
-              </div>
-              <div className="town-detail-desc">{selectedDef.description}</div>
-              <div className="town-detail-desc">Grid: ({selectedBuilding.gx}, {selectedBuilding.gy}) | Entity: {selectedBuilding.id}</div>
-              {selectedDef.upgradable && selectedBuilding.level < selectedDef.maxLevel && (
-                <>
-                  <div className="town-detail-cost">
-                    Upgrade cost: W {selectedCost.wood} / S {selectedCost.stone} / O {selectedCost.ore} / G {selectedCost.gold}
-                  </div>
-                  <button
-                    type="button"
-                    className="town-upgrade-btn"
-                    onClick={() => onUpgrade(selectedBuilding.id)}
-                    disabled={!canUpgrade}
-                    title={selectedQueued ? 'This building is already upgrading.' : queueFull ? 'Build queue is full.' : undefined}
-                  >
-                    {selectedQueued ? 'Queued' : queueFull ? 'Queue Full' : 'Upgrade'}
-                  </button>
-                </>
-              )}
-              <button type="button" className="town-clear-selection-btn" onClick={onClearSelection}>
-                Clear Selection
-              </button>
-            </div>
-          )}
         </aside>
 
-        <main className="town-map-wrap" ref={mapWrapRef}>
+        <main className={`town-map-wrap ${interactionMode === 'edit' ? 'is-editing' : ''}`} ref={mapWrapRef}>
+          {interactionMode === 'edit' && (
+            <div className="town-edit-banner">编辑模式：拖动建筑调整位置，完成后请保存布局或取消编辑</div>
+          )}
           {children}
         </main>
       </div>
+
+      {interactionMode === 'preview' && selectedBuilding && selectedDef && (
+        <div className="town-panel-overlay" onClick={onClearSelection}>
+          <BuildingPanel
+            building={selectedBuilding}
+            def={selectedDef}
+            canUpgrade={!!canUpgrade}
+            hasEnoughResources={hasEnoughResources}
+            resources={resources}
+            selectedCost={selectedCost}
+            queued={selectedQueued}
+            queueFull={queueFull}
+            onUpgrade={() => onUpgrade(selectedBuilding.id)}
+            onClose={onClearSelection}
+            extraContent={renderBuildingExtra()}
+          />
+        </div>
+      )}
     </div>
   );
 };
 
 export default TownScreen;
-
-

@@ -3,7 +3,7 @@ import { Renderer } from './Renderer';
 import { TownPixiRenderer } from './TownPixiRenderer';
 import { TownController } from './TownController';
 import { sfx } from './SoundSystem';
-import { BuildingInstance, GameState, PlayerState, TownState, TownBonus, ShopState } from './types';
+import { BuildingInstance, GameState, PlayerState, TownInteractionMode, TownState, TownBonus, ShopState } from './types';
 
 // Renderer is @ts-nocheck, declare shape for type safety here
 interface RendererLike {
@@ -228,6 +228,7 @@ export class GameEngine {
 
   initTownState() {
     this.townController.initState();
+    this.townController.setInteractionMode('preview');
     this.townState = this.townController.getState();
     this.townBonus = this.townController.getTownBonus();
   }
@@ -240,6 +241,30 @@ export class GameEngine {
 
   getSelectedTownBuildingId(): string | null {
     return this.townController.getSelectedEntityId();
+  }
+
+  getTownInteractionMode(): TownInteractionMode {
+    return this.townController.getInteractionMode();
+  }
+
+  setTownInteractionMode(mode: TownInteractionMode) {
+    this.townController.setInteractionMode(mode);
+  }
+
+  beginTownEdit() {
+    this.townController.beginTownEdit();
+  }
+
+  commitTownEdit() {
+    this.townController.commitTownEdit();
+    this.townState = this.townController.getState();
+    this.townBonus = this.townController.getTownBonus();
+  }
+
+  cancelTownEdit() {
+    this.townController.cancelTownEdit();
+    this.townState = this.townController.getState();
+    this.townBonus = this.townController.getTownBonus();
   }
 
   clearTownSelection() {
@@ -295,6 +320,10 @@ export class GameEngine {
   }
 
   backToTown() {
+    if (this.townController.isTownEditing()) {
+      this.townController.cancelTownEdit();
+    }
+    this.townController.setInteractionMode('preview');
     this.mode = 'town';
     this.gameStarted = false;
     this.callbacks.onModeChange('town');
